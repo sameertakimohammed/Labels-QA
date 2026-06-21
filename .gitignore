@@ -1,0 +1,18 @@
+# Runtime database (system of record) — regenerated from seedDB on first run.
+# Keep this OUT of version control so production QA data isn't committed and
+# so deploys don't clobber the live database. Back up the data/ folder instead.
+/data/db.json
+
+# Uploaded defect photos and signatures (runtime artifacts).
+/data/uploads/
+
+# Node
+node_modules/
+npm-debug.log*
+
+# OS / editor cruft
+.DS_Store
+Thumbs.db
+*.swp
+.vscode/
+.idea/
