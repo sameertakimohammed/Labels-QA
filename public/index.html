@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, maximum-scale=1.0, user-scalable=no">
+<meta name="theme-color" content="#0e2a47">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icon-192.png">
+<title>Golden QA - Starkist Label Inspection</title>
+<link rel="stylesheet" href="styles.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js" defer></script>
+</head>
+<body>
+  <!-- Login -->
+  <div id="login" class="login-wrap">
+    <div class="login">
+      <div class="mark">G</div>
+      <h1>Golden QA</h1>
+      <p>Starkist Label In-Process Inspection</p>
+      <div class="field"><label>Who are you?</label><select id="loginUser"></select></div>
+      <div class="pindots" id="pindots">····</div>
+      <div class="pinpad" id="pinpad"></div>
+      <div class="row-actions" style="margin-top:16px">
+        <button class="btn gold block" id="pinLogin">Sign in with PIN</button>
+      </div>
+      <div class="row-actions">
+        <button class="btn ghost block" id="ssoLogin">Sign in with Microsoft 365</button>
+      </div>
+      <p style="margin-top:14px;font-size:12px">Demo PINs - QAO 1234 · Supervisor 2345 · Manager 9999 · Admin 0000</p>
+    </div>
+  </div>
+
+  <!-- App -->
+  <div id="appwrap" class="hidden">
+    <header class="app">
+      <div class="bar">
+        <div class="brand"><div class="mark">G</div><div><h1>Golden QA</h1><p>Starkist Label Inspection</p></div></div>
+        <div class="right">
+          <span class="netdot" id="netdot" title="online"></span>
+          <span class="who"><b id="whoName">-</b><span id="whoRole">-</span></span>
+          <button class="btn ghost sm" id="logoutBtn">Logout</button>
+        </div>
+      </div>
+      <nav class="tabs" id="tabs">
+        <button data-view="dashboard" class="active">Dashboard</button>
+        <button data-view="new">+ New Job</button>
+        <button data-view="entry">Data Entry</button>
+        <button data-view="lookup">Job Lookup</button>
+        <button data-view="analytics">Analytics</button>
+        <button data-view="admin">Admin</button>
+      </nav>
+    </header>
+    <main id="app"></main>
+  </div>
+
+  <div id="modalRoot"></div>
+  <div class="toast" id="toast"></div>
+<script src="app.js"></script>
+</body>
+</html>

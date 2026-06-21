@@ -1,0 +1,24 @@
+{
+  "port": 3000,
+  "host": "0.0.0.0",
+  "orgName": "Golden Manufacturers Pte Ltd",
+  "sso": { "enabled": true, "allowedDomain": "golden.com.fj", "note": "Stub: replace verifySso() with Microsoft Entra ID token validation in production." },
+  "businessCentral": {
+    "enabled": false,
+    "baseUrl": "http://bc-test.gml.com.fj:7048/BC140/ODataV4",
+    "company": "Golden Manufacturers Pte Ltd",
+    "jobService": "QAJobCard",
+    "note": "Set enabled=true and confirm the published OData service that holds the print Job# + item. Adapter runs server-side (on-prem server can reach BC)."
+  },
+  "notify": {
+    "teamsWebhookUrl": "",
+    "email": { "enabled": false, "smtpHost": "", "from": "qa@golden.com.fj", "to": ["ateet@golden.com.fj"] },
+    "note": "Paste a Teams Incoming Webhook URL and/or SMTP details to enable hold/reject alerts."
+  },
+  "tolerances": {
+    "cofMin": 0.20, "cofMax": 0.40,
+    "registrationMaxMm": 0.15,
+    "barcodeMinGrade": "C",
+    "note": "Used for auto pass/fail flags. Edit in Admin > Tolerances."
+  }
+}

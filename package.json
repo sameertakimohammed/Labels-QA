@@ -1,0 +1,9 @@
+{
+  "name": "golden-qa-app",
+  "version": "1.0.0",
+  "description": "Golden Manufacturers - Starkist Label QA in-process inspection system (tablet-first, on-prem).",
+  "main": "server.js",
+  "scripts": { "start": "node server.js" },
+  "engines": { "node": ">=18" },
+  "private": true
+}
