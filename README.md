@@ -4,22 +4,45 @@ A tablet-first quality-inspection app for the Starkist paper-label line. Operato
 Officers capture each of the four production stages on a tablet; every record is keyed to one
 **Job #**, and typing a Job # returns the full cross-stage quality record.
 
-Built to run on an **on-premise server** with **zero external dependencies** (Node.js only).
+Built to run on an **on-premise server** on **Node.js + PostgreSQL**. The only runtime
+dependency is the `pg` Postgres driver; the front end is dependency-free vanilla JS.
 
 ---
 
 ## 1. Quick start (on-prem server)
 
-1. Install **Node.js 18+** on the server (https://nodejs.org).
-2. Copy this `Golden-QA-App` folder onto the server.
-3. From a terminal in this folder, run:
+1. Install **Node.js 18+** (https://nodejs.org) and **PostgreSQL 13+** on the server.
+2. Create a database and (recommended) a dedicated role:
+
+   ```sql
+   CREATE DATABASE goldenqa;
+   CREATE USER goldenqa WITH PASSWORD 'change-me';
+   GRANT ALL PRIVILEGES ON DATABASE goldenqa TO goldenqa;
+   ```
+
+3. Copy this `Golden-QA-App` folder onto the server and install the driver:
+
+   ```
+   npm install
+   ```
+
+4. Point the app at your database — either edit the `database` block in `config.json`,
+   or set a connection string (takes precedence):
+
+   ```
+   export DATABASE_URL=postgres://goldenqa:change-me@localhost:5432/goldenqa
+   ```
+
+5. Start it:
 
    ```
    node server.js
    ```
 
-4. You'll see: `Golden QA server on http://0.0.0.0:3000`.
-5. On any tablet on the same network, open **http://<server-ip>:3000** (e.g. http://192.168.1.50:3000).
+   Tables are created automatically on first run. If a legacy `data/db.json` is present it
+   is imported once as a migration; otherwise the default seed data is loaded. You'll see:
+   `Golden QA server on http://0.0.0.0:3000 (…) [PostgreSQL]`.
+6. On any tablet on the same network, open **http://<server-ip>:3000** (e.g. http://192.168.1.50:3000).
 
 To keep it running after logoff, install it as a service (Windows: `nssm`, or Task Scheduler;
 Linux: `systemd` or `pm2`). See section 7.
@@ -58,7 +81,8 @@ Linux: `systemd` or `pm2`). See section 7.
 | Key | What it does |
 |-----|--------------|
 | `port` / `host` | Server address (default 3000 on all interfaces) |
-| `auth` | `sessionTtlMinutes` — sliding inactivity timeout for sign-ins (default 720 = 12h). Sessions persist to `data/sessions.json` so a restart doesn't log everyone out |
+| `database` | PostgreSQL connection (`host`/`port`/`database`/`user`/`password`/`ssl`, or a single `url`). The `DATABASE_URL` env var overrides these. Tables are auto-created on first run |
+| `auth` | `sessionTtlMinutes` — sliding inactivity timeout for sign-ins (default 720 = 12h). Sessions are stored in the `sessions` table so a restart doesn't log everyone out |
 | `sso` | Microsoft 365 sign-in. `mode:"stub"` accepts any `@golden.com.fj` email (demo). For production set `mode:"entra"` + `tenantId`/`clientId` and implement `verifyEntraToken()` in `server.js` |
 | `businessCentral` | Set `enabled:true` and confirm `jobService` (the published OData web service holding the print Job# + item). The server queries `bc-test.gml.com.fj` directly — run it on a host that can reach BC |
 | `notify` | Paste a **Teams Incoming Webhook URL** and/or SMTP details to get hold/reject alerts |
@@ -80,12 +104,19 @@ Linux: `systemd` or `pm2`). See section 7.
 
 ## 6. Data, backup & database
 
-- All data lives in `data/db.json`; uploaded photos/signatures in `data/uploads/`.
-- **Back up the `data/` folder** on a schedule (it is the system of record).
-- The storage layer is deliberately simple and **swappable**. For higher volume/concurrency,
-  replace the `loadDB`/`saveDB` functions with **PostgreSQL** (recommended) or **SQLite**
-  (`node:sqlite`). The data shapes already map cleanly to tables: `jobs`, `stage1..4`, `users`,
-  `audit`, `masterdata`.
+- All records live in **PostgreSQL**; uploaded photos/signatures are files in `data/uploads/`.
+- The schema is **fully normalized** and created automatically on first run (see `db.js`):
+  - `users`, `sessions`, `audit`
+  - `machines` + `machine_stations`, `defect_types`, `products`, `tolerances` (master data)
+  - `jobs`, and per stage: `stage1..4` headers plus child tables for repeating rows
+    (`stage1_stations`, `stage2_rows`, `stage3_rolls`, `stage4_checks` + `stage4_check_values`)
+    and a shared `stage_photos` table.
+- **Back up the database** (`pg_dump`) and the `data/uploads/` folder on a schedule — together
+  they are the system of record.
+- **Migration:** if a legacy `data/db.json` is present on first run, it is imported once into
+  Postgres automatically, then ignored. After that, Postgres is the single source of truth.
+- All data access goes through the `db.js` module (the `pg` connection pool), so the API layer
+  stays thin and the schema is easy to extend.
 
 ---
 
@@ -98,7 +129,8 @@ Linux: `systemd` or `pm2`). See section 7.
 - [ ] Replace the SSO stub with real **Microsoft Entra ID** validation — set `sso.mode="entra"`
       and implement `verifyEntraToken()` in `server.js` (a documented scaffold is in place).
 - [ ] Run as a service (pm2 / systemd / Windows service) with auto-restart.
-- [ ] Move to **PostgreSQL** and schedule **backups** of the database + `uploads/`.
+- [ ] Provision **PostgreSQL** (dedicated role + DB) and schedule **backups** (`pg_dump`) of the
+      database + the `uploads/` folder. Restrict DB network access to the app host.
 - [ ] Confirm the **Business Central** web service and enable it.
 - [ ] Set the **SQF document-retention** period and confirm with your auditor.
 
@@ -106,7 +138,8 @@ Linux: `systemd` or `pm2`). See section 7.
 
 ## 8. What's included (feature list)
 
-Tablet-first PWA (installable, offline + sync) · PIN + Microsoft 365 sign-in · role-based access ·
+Tablet-first PWA (installable, offline + sync) · **PostgreSQL** (fully normalized schema, auto-migrated) ·
+PIN + Microsoft 365 sign-in · role-based access ·
 persistent sessions with inactivity expiry · **user management** (add/edit/disable, reset PIN,
 roles — Administrator only) · machine-driven Stage-1 forms · all 4 stages with real form fields ·
 **in-sequence stage completion with required-field validation** · barcode/QR Job# scanning ·
