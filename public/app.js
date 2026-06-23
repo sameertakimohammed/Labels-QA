@@ -58,7 +58,8 @@ function setNet(){ const d=$("#netdot"); if(!d)return; if(navigator.onLine){ d.c
 window.addEventListener("online", ()=>{ setNet(); flushQueue(); });
 window.addEventListener("offline", setNet);
 function queueGet(){ try{ return JSON.parse(localStorage.getItem("gqa_queue")||"[]"); }catch(e){ return []; } }
-function queueSet(q){ localStorage.setItem("gqa_queue", JSON.stringify(q)); }
+function queueSet(q){ localStorage.setItem("gqa_queue", JSON.stringify(q)); updateQueueBadge(); }
+function updateQueueBadge(){ const b=$("#qbadge"); if(!b)return; const n=queueGet().length; if(n>0){ b.textContent="⤿ "+n+" to sync"; b.classList.remove("hidden"); } else { b.classList.add("hidden"); } }
 async function flushQueue(){
   let q=queueGet(); if(!q.length) return; const keep=[]; let synced=0, rejected=0;
   for(const item of q){
@@ -142,6 +143,8 @@ function showApp(){
   $("#sidebar").onclick=(e)=>{ const b=e.target.closest("button[data-view]"); if(b) go(b.dataset.view); };
   $("#navToggle").onclick=()=>{ $("#sidebar").classList.toggle("open"); $("#scrim").classList.toggle("show"); };
   $("#scrim").onclick=closeNav;
+  const qb=$("#qbadge"); if(qb) qb.onclick=()=>{ if(queueGet().length){ toast("Syncing queued changes…"); flushQueue(); } };
+  updateQueueBadge();
   go("dashboard");
 }
 function buildSidebar(){
@@ -419,6 +422,7 @@ async function avtDo(){ const csv=$("#avtcsv").value; try{ const r=await api("/a
 async function lookup(){
   const pre=CUR.jobNo||"";
   app().innerHTML=`<div class="card no-print"><h2>Job # Lookup</h2><p class="sub">Type or scan a Job # for the full cross-stage record.</p><div style="display:flex;gap:10px;max-width:560px"><input id="lk" placeholder="Job #" value="${esc(pre)}" style="font-size:19px"><button class="btn ghost" onclick="scanBarcode('lk')">📷</button><button class="btn gold" onclick="doLook()">Search</button></div></div><div id="lkr"></div>`;
+  const lk=$("#lk"); if(lk){ lk.onkeydown=(e)=>{ if(e.key==="Enter"){ e.preventDefault(); doLook(); } }; if(!pre) lk.focus(); }
   if(pre)doLook();
 }
 async function doLook(){ const no=$("#lk").value.trim(); const host=$("#lkr"); if(!no){host.innerHTML="";return;}

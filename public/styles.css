@@ -10,19 +10,15 @@ html,body{margin:0;height:100%}
 body{font-family:'Segoe UI',system-ui,-apple-system,Arial,sans-serif;background:var(--bg);color:var(--ink);font-size:17px;line-height:1.45}
 .hidden{display:none!important}
 /* top bar */
-header.app{position:sticky;top:0;z-index:20;background:linear-gradient(120deg,var(--navy),var(--navy2));color:#fff}
-.bar{display:flex;align-items:center;gap:14px;padding:12px 18px}
 .brand{display:flex;align-items:center;gap:11px}
 .brand .mark{width:44px;height:44px;border-radius:11px;background:var(--gold);display:flex;align-items:center;justify-content:center;font-weight:800;color:var(--navy);font-size:22px}
 .brand h1{font-size:17px;margin:0;font-weight:700}.brand p{margin:0;font-size:12px;opacity:.82}
-.bar .right{margin-left:auto;display:flex;align-items:center;gap:10px}
+header.topbar .right{margin-left:auto;display:flex;align-items:center;gap:10px}
 .who{text-align:right;font-size:13px;line-height:1.2}.who b{display:block;font-size:14px}
 .netdot{width:11px;height:11px;border-radius:50%;background:#16a34a;box-shadow:0 0 0 3px rgba(255,255,255,.15)}
 .netdot.off{background:#ef4444}
-/* nav tabs */
-nav.tabs{display:flex;gap:4px;background:var(--navy2);padding:0 12px;overflow-x:auto}
-nav.tabs button{flex:0 0 auto;background:transparent;border:0;color:#cdd9e8;padding:13px 18px;font-size:15px;font-weight:700;cursor:pointer;border-bottom:3px solid transparent}
-nav.tabs button.active{color:#fff;border-bottom-color:var(--gold)}
+.qbadge{background:var(--gold);color:var(--navy);border:0;border-radius:999px;font-size:12.5px;font-weight:800;padding:6px 12px;min-height:0;cursor:pointer;white-space:nowrap}
+.qbadge:active{transform:translateY(1px)}
 main{max-width:1100px;margin:0 auto;padding:20px}
 /* topbar + sidebar layout */
 header.topbar{position:sticky;top:0;z-index:30;display:flex;align-items:center;gap:12px;padding:10px 16px;background:linear-gradient(120deg,var(--navy),var(--navy2));color:#fff}
@@ -98,9 +94,6 @@ td input,td select{min-height:46px;padding:9px;font-size:15px}
 .login{background:#fff;border-radius:18px;box-shadow:var(--shadow);padding:30px;width:100%;max-width:420px}
 .login .mark{width:60px;height:60px;border-radius:14px;background:var(--gold);display:flex;align-items:center;justify-content:center;font-weight:800;color:var(--navy);font-size:30px;margin:0 auto 14px}
 .login h1{text-align:center;font-size:21px;margin:0 0 4px;color:var(--navy)}.login p{text-align:center;color:var(--muted);margin:0 0 20px;font-size:14px}
-.pinpad{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:14px}
-.pinpad button{padding:18px;font-size:22px;font-weight:800;border:2px solid var(--line);background:#fff;border-radius:12px;cursor:pointer;color:var(--navy)}
-.pindots{text-align:center;font-size:30px;letter-spacing:10px;height:38px;color:var(--navy)}
 /* modal */
 .modal-bg{position:fixed;inset:0;background:rgba(8,20,35,.55);display:flex;align-items:center;justify-content:center;z-index:80;padding:18px}
 .modal{background:#fff;border-radius:16px;max-width:560px;width:100%;max-height:90vh;overflow:auto;padding:24px}
@@ -110,7 +103,7 @@ canvas.sig{border:2px dashed var(--line);border-radius:12px;width:100%;height:17
 .countdown{font-weight:800}
 @media print{
   body{background:#fff;font-size:12px}
-  header.app,nav.tabs,header.topbar,.sidebar,.scrim,.row-actions,.no-print,.toast,#login{display:none!important}
+  header.topbar,.sidebar,.scrim,.row-actions,.no-print,.toast,#login{display:none!important}
   main{max-width:100%;padding:0;margin:0}
   .card{box-shadow:none;border:none;padding:0;margin:0}
   .summary-stage{border:1px solid #999;break-inside:avoid;page-break-inside:avoid;margin-bottom:10px}
