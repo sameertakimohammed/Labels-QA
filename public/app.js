@@ -5,8 +5,8 @@ const QC_PARAMS = ["Banded Bundle Checked","Shrink-Wrapped Bundle Checked","Pack
 const YN = ["","Yes","No","N/A"];
 const ROLES = ["QA Officer","Supervisor","Quality Manager","Administrator"];
 const NAV = [
-  { group:"", items:[
-    {v:"dashboard",label:"Dashboard",icon:"dashboard"},
+  { group:"Overview", items:[ {v:"dashboard",label:"Dashboard",icon:"dashboard"} ]},
+  { group:"Inspection", items:[
     {v:"new",label:"New Job",icon:"plus"},
     {v:"entry",label:"Data Entry",icon:"edit"},
     {v:"lookup",label:"Job Lookup",icon:"search"}
