@@ -372,6 +372,20 @@ async function main() {
     eq('GET /metrics -> 200', r.status, 200);
     ok('/metrics exposes gqa_ gauges', typeof r.raw === 'string' && r.raw.indexOf('gqa_jobs_total') >= 0, (r.raw || '').slice(0, 40));
 
+    // 25. SPC + supplier scorecards
+    r = await request('GET', '/api/spc?param=cof', undefined, adminToken);
+    eq('GET /api/spc -> 200', r.status, 200);
+    ok('spc returns points[]/mean/cpk/violations',
+      !!(r.body && Array.isArray(r.body.points) && 'mean' in r.body && 'cpk' in r.body && Array.isArray(r.body.violations)),
+      JSON.stringify(r.body && { n: r.body.n, mean: r.body.mean }));
+    r = await request('GET', '/api/spc?param=registration', undefined, adminToken);
+    eq('GET /api/spc?param=registration -> 200', r.status, 200);
+    r = await request('GET', '/api/suppliers', undefined, adminToken);
+    eq('GET /api/suppliers -> 200', r.status, 200);
+    ok('suppliers returns scorecards with fpy',
+      Array.isArray(r.body) && (r.body.length === 0 || (typeof r.body[0].fpy === 'number' && typeof r.body[0].jobs === 'number')),
+      JSON.stringify(r.body && r.body.length));
+
   } catch (e) {
     failed++;
     console.log('FAIL  unexpected error during run -> ' + (e && e.stack ? e.stack : e));

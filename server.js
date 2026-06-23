@@ -527,6 +527,8 @@ async function api(req, res, url) {
   if (seg[0]==='avt-import' && method==='POST') { const b=await readBody(req); const r=AVT.parse(b.csv||''); return send(res,200,r); }
 
   if (seg[0]==='analytics' && method==='GET') return send(res,200, analytics({ from:url.searchParams.get('from')||'', to:url.searchParams.get('to')||'', shift:url.searchParams.get('shift')||'' }));
+  if (seg[0]==='spc' && method==='GET') return send(res,200, spc(url.searchParams.get('param')||'cof'));
+  if (seg[0]==='suppliers' && method==='GET') return send(res,200, suppliers());
 
   if (seg[0]==='digest' && method==='GET' && !seg[1]) return send(res,200, buildDigest());
   if (seg[0]==='digest' && seg[1]==='send' && method==='POST') {
@@ -624,6 +626,38 @@ function metricsText(){
   add('gqa_users_total','User accounts','gauge',(DB.users||[]).length);
   add('gqa_uptime_seconds','Process uptime in seconds','counter',Math.round(process.uptime()));
   return out.join('\n')+'\n';
+}
+
+function round(x,d){ d=(d==null?3:d); const m=Math.pow(10,d); return Math.round((Number(x)||0)*m)/m; }
+/* SPC: control chart + capability (Cp/Cpk) for a Stage-1 numeric variable. */
+function spc(param){
+  const tol=(DB.masterdata&&DB.masterdata.tolerances)||{};
+  const defs={ cof:{ key:'cofFilmMetal', lsl:Number(tol.cofMin), usl:Number(tol.cofMax), label:'COF (film to metal)' },
+               registration:{ key:'printRegistration', lsl:0, usl:Number(tol.registrationMaxMm), label:'Print registration (mm)' } };
+  const def=defs[param]||defs.cof;
+  const points=[];
+  DB.jobs.forEach(j=>{ const s1=j.stage1||{}; const v=parseFloat(s1[def.key]); if(!isNaN(v)) points.push({ jobNo:j.jobNo, date:s1.date||j.created, value:v }); });
+  points.sort((a,b)=> (a.date<b.date?-1:1));
+  const vals=points.map(p=>p.value); const n=vals.length;
+  const mean=n?vals.reduce((a,b)=>a+b,0)/n:0;
+  const sigma=n>1?Math.sqrt(vals.reduce((a,b)=>a+(b-mean)*(b-mean),0)/(n-1)):0;
+  const ucl=mean+3*sigma, lcl=mean-3*sigma; const usl=def.usl, lsl=def.lsl;
+  const cp=(sigma>0 && isFinite(usl) && isFinite(lsl))?(usl-lsl)/(6*sigma):null;
+  const cpkRaw=sigma>0?Math.min(isFinite(usl)?(usl-mean)/(3*sigma):Infinity, isFinite(lsl)?(mean-lsl)/(3*sigma):Infinity):null;
+  const violations=points.filter(p=> (sigma>0&&(p.value>ucl||p.value<lcl)) || (isFinite(usl)&&p.value>usl) || (isFinite(lsl)&&p.value<lsl)).map(p=>p.jobNo);
+  return { param, label:def.label, points, n, mean:round(mean), sigma:round(sigma), ucl:round(ucl), lcl:round(lcl),
+    usl:isFinite(usl)?usl:null, lsl:isFinite(lsl)?lsl:null, cp:cp==null?null:round(cp,2), cpk:(cpkRaw==null||!isFinite(cpkRaw))?null:round(cpkRaw,2), violations };
+}
+/* Supplier scorecards from the Stage-1 supplier field. */
+function suppliers(){
+  const map={};
+  DB.jobs.forEach(j=>{ const s1=j.stage1||{}; const sup=(String(s1.supplier||'').trim())||'(unspecified)';
+    const m=map[sup]||(map[sup]={ supplier:sup, jobs:0, released:0, holdReject:0, defectKg:0, wasteKg:0 });
+    m.jobs++; const st=jobStatus(j); if(st==='Released')m.released++; if(st==='Hold'||st==='Rejected')m.holdReject++;
+    (((j.stage2||{}).rows)||[]).forEach(r=>{ if(r.defect) m.defectKg+=parseFloat(r.weightKg)||0; });
+    (((j.stage3||{}).rolls)||[]).forEach(r=>{ m.wasteKg+=parseFloat(r.wasteKg)||0; });
+  });
+  return Object.values(map).map(m=>({ supplier:m.supplier, jobs:m.jobs, released:m.released, holdReject:m.holdReject, defectKg:round(m.defectKg,2), wasteKg:round(m.wasteKg,2), fpy:m.jobs?Math.round(m.released/m.jobs*100):0 })).sort((a,b)=>b.jobs-a.jobs);
 }
 
 /* ---------- manager digest (emailed / Teams) ---------- */

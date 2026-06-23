@@ -11,8 +11,8 @@ const NAV = [
     {v:"entry",label:"Data Entry",icon:"edit"},
     {v:"lookup",label:"Job Lookup",icon:"search"}
   ]},
-  { group:"Quality", items:[ {v:"capa",label:"CAPA",icon:"capa"}, {v:"equip",label:"Equipment",icon:"equip"} ]},
-  { group:"Reports", items:[ {v:"reports",label:"Reports",icon:"chart"} ]},
+  { group:"Quality", items:[ {v:"capa",label:"CAPA",icon:"capa"}, {v:"equip",label:"Equipment",icon:"equip"}, {v:"spc",label:"SPC",icon:"spc"} ]},
+  { group:"Reports", items:[ {v:"reports",label:"Reports",icon:"chart"}, {v:"suppliers",label:"Suppliers",icon:"truck"} ]},
   { group:"Settings", items:[
     {v:"team",label:"Team & Access",icon:"users",mgr:true},
     {v:"audit",label:"Audit Trail",icon:"audit",mgr:true},
@@ -34,7 +34,9 @@ const ICONS = {
   capa:"M9 5H7a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2M9 5a2 2 0 0 0 2 2h2a2 2 0 0 0 2-2M9 5a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2m-5 9 2 2 4-4",
   exec:"M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0zM12 12l3.5-2.2",
   equip:"M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z",
-  plug:"M18 8a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM6 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM18 22a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM8.6 13.5l6.8 3.9M15.4 6.6 8.6 10.5"
+  plug:"M18 8a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM6 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM18 22a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM8.6 13.5l6.8 3.9M15.4 6.6 8.6 10.5",
+  spc:"M3 3v18h18M7 15l3-4 3 3 4-6",
+  truck:"M1 3h15v13H1zM16 8h4l3 3v5h-7M5.5 19a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3zM18.5 19a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3z"
 };
 function ic(n){ return `<svg class="nav-ic" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="${ICONS[n]||''}"/></svg>`; }
 const STAGES = [
@@ -168,7 +170,7 @@ function go(view,opts={}){ CUR.view=view; if(opts.jobNo!==undefined)CUR.jobNo=op
   document.querySelectorAll('#sidebar button[data-view]').forEach(b=>b.classList.toggle("active",b.dataset.view===view)); closeNav(); render(); }
 function render(){ const v=CUR.view;
   if(v==="dashboard")dashboard(); else if(v==="new")newJob(); else if(v==="entry")entry(); else if(v==="lookup")lookup();
-  else if(v==="exec")execDashboard(); else if(v==="capa")capaPage(); else if(v==="equip")equipmentPage(); else if(v==="reports")reports(); else if(v==="team")team(); else if(v==="audit")auditTrail(); else if(v==="integrations")integrationsPage(); else if(v==="settings")settings(); else if(v==="account")myAccount();
+  else if(v==="exec")execDashboard(); else if(v==="capa")capaPage(); else if(v==="equip")equipmentPage(); else if(v==="spc")spcPage(); else if(v==="reports")reports(); else if(v==="suppliers")suppliersPage(); else if(v==="team")team(); else if(v==="audit")auditTrail(); else if(v==="integrations")integrationsPage(); else if(v==="settings")settings(); else if(v==="account")myAccount();
   else dashboard(); }
 
 /* ---------- dashboard ---------- */
@@ -675,6 +677,40 @@ async function saveHook(){ const url=val("wh_url").trim(); if(!/^https?:\/\//i.t
   const events=[...document.querySelectorAll('.wh_ev:checked')].map(c=>c.value);
   try{ await api("/api/admin/webhooks",{method:"POST",body:{url,secret:val("wh_secret"),events}}); closeModal(); toast("Webhook added"); integrationsPage(); }catch(e){ toast(e.message); } }
 async function delHook(id){ if(!confirm("Delete this webhook?")) return; try{ await api("/api/admin/webhooks/"+encodeURIComponent(id),{method:"DELETE"}); toast("Webhook deleted"); integrationsPage(); }catch(e){ toast(e.message); } }
+
+/* SPC — statistical process control */
+async function spcPage(){
+  app().innerHTML=`<div class="card"><h2>SPC — Statistical Process Control</h2><p class="sub">Control chart and process capability (Cp/Cpk) for an in-process variable.</p>
+    <div class="grid g4 no-print"><div class="field"><label>Parameter</label><select id="spc_param" onchange="loadSpc()"><option value="cof">COF (film to metal)</option><option value="registration">Print registration (mm)</option></select></div></div>
+    <div class="stats" id="spc_kpis"></div>
+    <div id="spc_viol"></div>
+    <canvas id="cSpc" height="240"></canvas></div>`;
+  loadSpc();
+}
+async function loadSpc(){
+  const param=val("spc_param")||"cof"; let d; try{ d=await api("/api/spc?param="+encodeURIComponent(param)); }catch(e){ toast(e.message); return; }
+  const cpkRag=d.cpk!=null?(d.cpk>=1.33?'rag-green':(d.cpk>=1?'rag-amber':'rag-red')):'';
+  $("#spc_kpis").innerHTML=`<div class="stat"><div class="n">${esc(d.n)}</div><div class="l">Samples</div></div><div class="stat"><div class="n">${esc(d.mean)}</div><div class="l">Mean</div></div><div class="stat"><div class="n">${d.cp==null?'—':esc(d.cp)}</div><div class="l">Cp</div></div><div class="stat ${cpkRag}"><div class="n">${d.cpk==null?'—':esc(d.cpk)}</div><div class="l">Cpk</div></div>`;
+  $("#spc_viol").innerHTML = d.n<2?`<div class="banner">Need at least 2 samples for control limits. Record more ${esc(d.label)} readings in Stage 1.</div>`:(d.violations.length?`<div class="banner warn">Out-of-limit points: ${d.violations.map(esc).join(', ')}</div>`:`<div class="banner" style="background:var(--green-bg);border-color:#aee0bf;color:var(--green)">All ${esc(d.n)} points within control &amp; spec limits.</div>`);
+  if(!window.Chart){ toast("Charts need internet (Chart.js)"); return; }
+  Object.values(CHARTS).forEach(c=>{try{c.destroy()}catch(e){}}); CHARTS={};
+  const labels=d.points.map(p=>p.jobNo); const line=v=>labels.map(()=>v);
+  const ds=[{label:d.label,data:d.points.map(p=>p.value),borderColor:"#0e2a47",backgroundColor:"#0e2a47",pointRadius:4,tension:0},
+    {label:"Mean",data:line(d.mean),borderColor:"#15803d",borderDash:[6,4],pointRadius:0},
+    {label:"UCL",data:line(d.ucl),borderColor:"#b91c1c",borderDash:[4,4],pointRadius:0},
+    {label:"LCL",data:line(d.lcl),borderColor:"#b91c1c",borderDash:[4,4],pointRadius:0}];
+  if(d.usl!=null) ds.push({label:"USL",data:line(d.usl),borderColor:"#b45309",pointRadius:0});
+  if(d.lsl!=null) ds.push({label:"LSL",data:line(d.lsl),borderColor:"#b45309",pointRadius:0});
+  CHARTS.spc=new Chart($("#cSpc"),{type:"line",data:{labels,datasets:ds},options:{plugins:{legend:{position:"bottom"}}}});
+}
+
+/* supplier scorecards */
+async function suppliersPage(){
+  app().innerHTML=`<div class="card"><h2>Supplier scorecards</h2><p class="sub">Quality by material supplier (from the Stage-1 Supplier field).</p><div id="sup_body"><div class="empty">Loading…</div></div></div>`;
+  let list; try{ list=await api("/api/suppliers"); }catch(e){ toast(e.message); return; }
+  const rows=list.map(s=>`<tr><td><b>${esc(s.supplier)}</b></td><td>${esc(s.jobs)}</td><td>${esc(s.released)}</td><td>${esc(s.holdReject)}</td><td><span class="pill ${s.fpy>=95?'green':(s.fpy>=85?'amber':'red')}">${esc(s.fpy)}%</span></td><td>${esc(s.defectKg)}</td><td>${esc(s.wasteKg)}</td></tr>`).join("");
+  $("#sup_body").innerHTML = list.length?`<div style="overflow-x:auto"><table><thead><tr><th>Supplier</th><th>Jobs</th><th>Released</th><th>Hold/Rej</th><th>FPY</th><th>Defect kg</th><th>Waste kg</th></tr></thead><tbody>${rows}</tbody></table></div>`:`<div class="empty">No supplier data yet — set the <b>Supplier</b> field in Stage 1.</div>`;
+}
 
 /* team & access */
 async function team(){
