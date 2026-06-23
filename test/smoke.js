@@ -181,6 +181,27 @@ async function main() {
       !!(r.body && r.body.stage1 && r.body.stage1._done === true),
       JSON.stringify(r.body && r.body.stage1));
 
+    // 10b. edit job metadata
+    r = await request('PUT', '/api/jobs/' + encodeURIComponent(JOB), { product: 'Edited Label', customer: 'StarKist' }, adminToken);
+    eq('PUT /api/jobs/:jobNo edits metadata -> 200', r.status, 200);
+    ok('job product updated', !!(r.body && r.body.product === 'Edited Label'), JSON.stringify(r.body && r.body.product));
+
+    // 10c. clone job
+    const CLONE = JOB + '-C';
+    r = await request('POST', '/api/jobs/' + encodeURIComponent(JOB) + '/clone', { jobNo: CLONE }, adminToken);
+    eq('POST /api/jobs/:jobNo/clone -> 200', r.status, 200);
+    ok('clone has empty stage1', !!(r.body && r.body.stage1 && r.body.stage1._done === false), JSON.stringify(r.body && r.body.stage1));
+
+    // 10d. delete the clone
+    r = await request('DELETE', '/api/jobs/' + encodeURIComponent(CLONE), undefined, adminToken);
+    eq('DELETE /api/jobs/:jobNo -> 200', r.status, 200);
+    r = await request('GET', '/api/jobs/' + encodeURIComponent(CLONE), undefined, adminToken);
+    eq('deleted clone now 404', r.status, 404);
+
+    // 10e. backups status endpoint
+    r = await request('GET', '/api/admin/backups', undefined, adminToken);
+    eq('GET /api/admin/backups -> 200', r.status, 200);
+
     // 11. analytics returns kpis
     r = await request('GET', '/api/analytics', undefined, adminToken);
     eq('GET /api/analytics returns 200', r.status, 200);

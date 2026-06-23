@@ -206,17 +206,39 @@ async function entry(){
   const done=n=>JOB["stage"+n]&&JOB["stage"+n]._done; const c=[1,2,3,4].filter(done).length;
   const bar=STAGES.map(s=>`<button class="${CUR.stage===s.key?'active':''}" onclick="go('entry',{jobNo:'${jsq(JOB.jobNo)}',stage:'${s.key}'})"><div class="s-no">Stage ${s.no} · ${esc(s.form)}</div><div class="s-nm">${esc(s.name)}</div><div class="s-st">${done(s.no)?'<span class="pill green">Complete</span>':'<span class="pill grey">Pending</span>'}</div></button>`).join("");
   const canHold=["Supervisor","Quality Manager","Administrator"].includes(ME.role);
+  const canDelete=["Quality Manager","Administrator"].includes(ME.role);
   app().innerHTML=`<div class="card">
     <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
       <div><h2 style="margin:0">Job ${esc(JOB.jobNo)} ${statusPill(JOB.statusOverride|| (c===0?'New':(c<4?'In Progress':'Released')))}</h2>
       <p class="sub" style="margin:4px 0 0">${esc(JOB.product||'—')} · <span class="tag-machine">${esc(mlabel(JOB.machine))}</span> · ${esc(JOB.customer||'')}</p></div>
-      <div style="margin-left:auto" class="no-print"><button class="btn ghost sm" onclick="go('lookup',{jobNo:'${jsq(JOB.jobNo)}'})">Summary</button> ${canHold?`<button class="btn danger sm" onclick="holdJob('${jsq(JOB.jobNo)}')">Hold</button>`:''}</div>
+      <div style="margin-left:auto" class="no-print"><button class="btn ghost sm" onclick="go('lookup',{jobNo:'${jsq(JOB.jobNo)}'})">Summary</button> ${canHold?`<button class="btn ghost sm" onclick="editJobModal()">Edit details</button>`:''} <button class="btn ghost sm" onclick="cloneJobModal()">Clone</button> ${canHold?`<button class="btn danger sm" onclick="holdJob('${jsq(JOB.jobNo)}')">Hold</button>`:''} ${canDelete?`<button class="btn danger sm" onclick="deleteJob('${jsq(JOB.jobNo)}')">Delete</button>`:''}</div>
     </div>
     <div class="banner">Progress: ${c} of 4 stages complete. Complete in sequence.</div>
     <div class="stagebar">${bar}</div><div id="stageform"></div></div>`;
   stageForm(CUR.stage);
 }
 async function holdJob(no){ const reason=prompt("Reason for placing on hold?"); if(reason===null)return; await api("/api/jobs/"+encodeURIComponent(no)+"/hold",{method:"POST",body:{reason}}); toast("Job on hold"); entry(); }
+function editJobModal(){ const machines=MD.machines||{}; const canMachine=[1,2,3,4].every(n=>!(JOB["stage"+n]&&JOB["stage"+n]._done));
+  $("#modalRoot").innerHTML=`<div class="modal-bg"><div class="modal"><h2>Edit ${esc(JOB.jobNo)}</h2>
+    <div class="field"><label>Customer</label><input id="ej_customer" value="${esc(JOB.customer||'')}"></div>
+    <div class="field"><label>Product / Item</label><input id="ej_product" value="${esc(JOB.product||'')}"></div>
+    <div class="field"><label>Description</label><textarea id="ej_desc">${esc(JOB.description||'')}</textarea></div>
+    ${canMachine?`<div class="field"><label>Machine</label><select id="ej_machine">${Object.keys(machines).map(m=>`<option value="${esc(m)}" ${m===JOB.machine?'selected':''}>${esc(machines[m].label)} (${esc(machines[m].form)})</option>`).join("")}</select></div>`:`<p class="sub">Machine can't be changed once a stage is recorded.</p>`}
+    <div class="row-actions"><button class="btn gold" onclick="saveJobMeta()">Save</button><button class="btn ghost" onclick="closeModal()">Cancel</button></div></div></div>`;
+}
+async function saveJobMeta(){ const body={ customer:val("ej_customer"), product:val("ej_product"), description:val("ej_desc") }; const m=document.getElementById("ej_machine"); if(m)body.machine=m.value;
+  try{ await api("/api/jobs/"+encodeURIComponent(JOB.jobNo),{method:"PUT",body}); closeModal(); toast("Job details updated"); entry(); }catch(e){ toast(e.message); }
+}
+function cloneJobModal(){ $("#modalRoot").innerHTML=`<div class="modal-bg"><div class="modal"><h2>Clone ${esc(JOB.jobNo)}</h2><p class="sub">Creates a new job with the same customer, product and machine, and empty stages.</p>
+  <div class="field"><label>New Job # <span class="req">*</span></label><input id="cl_jobNo" placeholder="e.g. ${esc(JOB.jobNo)}-R2"></div>
+  <div class="row-actions"><button class="btn gold" onclick="doCloneJob()">Create copy</button><button class="btn ghost" onclick="closeModal()">Cancel</button></div></div></div>`;
+}
+async function doCloneJob(){ const jobNo=val("cl_jobNo").trim(); if(!jobNo){ toast("Enter a new Job #"); return; }
+  try{ const job=await api("/api/jobs/"+encodeURIComponent(JOB.jobNo)+"/clone",{method:"POST",body:{jobNo}}); closeModal(); toast("Cloned to "+job.jobNo); go("entry",{jobNo:job.jobNo,stage:"stage1"}); }catch(e){ toast(e.message); }
+}
+async function deleteJob(no){ if(!confirm("Delete job "+no+" and all its stage data? This cannot be undone.")) return;
+  try{ await api("/api/jobs/"+encodeURIComponent(no),{method:"DELETE"}); toast("Job "+no+" deleted"); go("dashboard"); }catch(e){ toast(e.message); }
+}
 
 function fT(id,l,v,ph){ return `<div class="field"><label>${l}</label><input id="${id}" value="${esc(v)}" placeholder="${esc(ph||'')}"></div>`; }
 function fA(id,l,v){ return `<div class="field"><label>${l}</label><textarea id="${id}">${esc(v)}</textarea></div>`; }
@@ -402,11 +424,21 @@ async function admin(){
   const canManage=["Quality Manager","Administrator"].includes(ME.role);
   let users=[]; try{ users = await api("/api/admin/users"); }catch(e){ users=[]; }
   window._users=users;
+  let backups=null; try{ backups=await api("/api/admin/backups"); }catch(e){}
+  let health=null; try{ health=await (await fetch("/api/health")).json(); }catch(e){}
   const userRows=users.map(u=>`<tr><td><b>${esc(u.id)}</b></td><td>${esc(u.name)}</td><td>${esc(u.role)}</td>${canManage?`<td class="no-print"><button class="btn ghost sm" onclick="userModal('${jsq(u.id)}')">Edit</button> <button class="btn danger sm" onclick="delUser('${jsq(u.id)}')">Remove</button></td>`:''}</tr>`).join("");
   app().innerHTML=`<div class="card"><h2>Admin</h2><p class="sub">Master data, users, integrations and audit trail. Role: ${esc(ME.role)}</p>
     <h3>Tolerances (auto pass/fail)</h3><div class="grid g4">${fT("t_cofMin","COF min",md.tolerances.cofMin)}${fT("t_cofMax","COF max",md.tolerances.cofMax)}${fT("t_reg","Registration max (mm)",md.tolerances.registrationMaxMm)}${fT("t_bc","Barcode min grade",md.tolerances.barcodeMinGrade)}</div><div class="row-actions"><button class="btn gold sm" onclick="saveTol()">Save tolerances</button></div>
     <h3>Defect types</h3><textarea id="a_def" style="min-height:80px">${esc((md.defectTypes||[]).join(", "))}</textarea><div class="row-actions"><button class="btn ghost sm" onclick="saveDefects()">Save defect list</button></div>
     <h3>Business Central test</h3><div style="display:flex;gap:8px;max-width:520px"><input id="bcNo" placeholder="Job #"><button class="btn ghost sm" onclick="bcTest()">Lookup</button></div><pre id="bcOut" style="white-space:pre-wrap;background:#f4f7fb;padding:10px;border-radius:8px;font-size:12px"></pre>
+    <h3>Backups &amp; storage</h3><div class="kv">
+      <div><span>Storage driver</span><b>${esc(health?health.storage:'?')}</b></div>
+      <div><span>Latest backup</span><b>${backups&&backups.latest?esc(backups.latest.name):'none found'}</b></div>
+      <div><span>Backup age</span><b>${backups&&backups.latest?esc(backups.latest.ageHours+' h'):'—'}</b></div>
+      <div><span>Backup size</span><b>${backups&&backups.latest?esc(backups.latest.sizeKB+' KB'):'—'}</b></div>
+      <div><span>Total dumps</span><b>${backups?esc(backups.count):'—'}</b></div>
+      <div><span>Backups dir</span><b style="font-size:12px">${esc(backups?backups.dir:'?')}</b></div>
+    </div>
     <h3>Users ${canManage?`<button class="btn gold sm no-print" style="margin-left:8px" onclick="userModal()">+ Add user</button>`:''}</h3>
     <div style="overflow-x:auto"><table><thead><tr><th>ID</th><th>Name</th><th>Role</th>${canManage?'<th class="no-print"></th>':''}</tr></thead><tbody>${userRows||`<tr><td colspan="4" style="color:var(--muted)">No users.</td></tr>`}</tbody></table></div>
     ${canManage?'':'<p class="sub" style="margin-top:8px">Only a Quality Manager or Administrator can add or edit users.</p>'}

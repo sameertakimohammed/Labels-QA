@@ -19,32 +19,46 @@ const AVT = require('./integrations/avtImport');
 const EMAIL = require('./integrations/email');
 const ENTRA = require('./integrations/entraId');
 const BACKUP = require('./integrations/backup');
-const SqliteStore = require('./integrations/storageSqlite');
+const { makeStorage } = require('./integrations/storage');
 
-/* ---------- persistence layer: JSON file by default, optional SQLite drop-in ---------- */
-let DB = null;
-const USE_SQLITE = !!(CFG.storage && CFG.storage.driver === 'sqlite' && SqliteStore.available());
-const SQLITE_PATH = (CFG.storage && CFG.storage.path) ? path.resolve(ROOT, CFG.storage.path) : path.join(DATA_DIR, 'db.sqlite');
-const STORE = USE_SQLITE ? SqliteStore.makeStore(SQLITE_PATH) : null;
-function loadDB() {
-  if (USE_SQLITE) { const loaded = STORE.load(); if (loaded) DB = loaded; else { DB = seedDB(); saveDB(); } }
-  else if (fs.existsSync(DB_FILE)) { DB = JSON.parse(fs.readFileSync(DB_FILE, 'utf8')); }
-  else { DB = seedDB(); saveDB(); }
+/* ---------- runtime config (env overrides config.json for container deploys) ---------- */
+const PROD = process.env.NODE_ENV === 'production';
+const SECRET_KEY = process.env.SECRET_KEY || '';
+if (PROD && SECRET_KEY.replace(/[^A-Za-z0-9]/g, '').length < 16) {
+  console.error('FATAL: set a strong SECRET_KEY (>= 16 alphanumeric chars) in production.'); process.exit(1);
 }
-function saveDB() { if (USE_SQLITE) STORE.save(DB); else fs.writeFileSync(DB_FILE, JSON.stringify(DB, null, 2)); }
+const TOKEN_SECRET = SECRET_KEY || 'dev-insecure-secret-change-me';
+const TOKEN_TTL_MS = (Number(process.env.SESSION_HOURS) || 12) * 60 * 60 * 1000;
+
+/* ---------- persistence: Postgres (DATABASE_URL) | SQLite | JSON file ---------- */
+let DB = null;
+const STORAGE = makeStorage({
+  databaseUrl: process.env.DATABASE_URL || '',
+  dbFile: DB_FILE,
+  sqlitePath: (CFG.storage && CFG.storage.path) ? path.resolve(ROOT, CFG.storage.path) : path.join(DATA_DIR, 'db.sqlite'),
+  driverPref: (CFG.storage && CFG.storage.driver) || 'json'
+});
+async function loadDB() { const loaded = await STORAGE.load(); if (loaded) DB = loaded; else { DB = seedDB(); await STORAGE.save(DB); } }
+let _saveChain = Promise.resolve();
+function saveDB() { _saveChain = _saveChain.then(() => STORAGE.save(DB)).catch(e => console.error('saveDB failed:', e && e.message)); return _saveChain; }
 function hashPw(pw, salt) { return crypto.scryptSync(String(pw), salt, 64).toString('hex'); }
 function checkPw(u, pw) { if (!u || !u.passHash) return false; const h = hashPw(pw, u.salt); return h.length === u.passHash.length && crypto.timingSafeEqual(Buffer.from(h), Buffer.from(u.passHash)); }
 function mkUser(id, name, role, pw) { const salt = crypto.randomBytes(16).toString('hex'); return { id, name, role, salt, passHash: hashPw(pw, salt) }; }
 
 function seedDB() {
+  const adminUser = (process.env.ADMIN_USERNAME || 'admin').toLowerCase();
+  const adminPass = process.env.ADMIN_PASSWORD || '';
+  if (PROD && !adminPass) { console.error('FATAL: set ADMIN_PASSWORD to seed the initial admin user in production.'); process.exit(1); }
+  // Production (ADMIN_PASSWORD set): seed a single admin, no demo data. Dev: seed the demo users + jobs.
+  const users = adminPass
+    ? [ mkUser(adminUser, 'Administrator', 'Administrator', adminPass) ]
+    : [ mkUser('akumar', 'A. Kumar', 'QA Officer', 'kumar123'),
+        mkUser('pdevi', 'P. Devi', 'QA Officer', 'devi123'),
+        mkUser('rprasad', 'R. Prasad', 'Supervisor', 'prasad123'),
+        mkUser('ateet', 'Ateet Roshan', 'Quality Manager', 'ateet123'),
+        mkUser('admin', 'Administrator', 'Administrator', 'admin123') ];
   return {
-    users: [
-      mkUser('akumar', 'A. Kumar', 'QA Officer', 'kumar123'),
-      mkUser('pdevi', 'P. Devi', 'QA Officer', 'devi123'),
-      mkUser('rprasad', 'R. Prasad', 'Supervisor', 'prasad123'),
-      mkUser('ateet', 'Ateet Roshan', 'Quality Manager', 'ateet123'),
-      mkUser('admin', 'Administrator', 'Administrator', 'admin123')
-    ],
+    users,
     masterdata: {
       machines: {
         Flexo450: { form: 'F-040-A', label: 'Flexo 450', stations: ['Infeed','Station 1','Station 2','Station 3','Station 4','Station 5','Station 6','Station 7','Station 8','Station 9'] },
@@ -55,7 +69,7 @@ function seedDB() {
       products: ['Chunk Light Tuna 142g Wrap Label','Solid White Albacore 198g Label','Chunk Light 85g Wrap Label'],
       tolerances: CFG.tolerances
     },
-    jobs: seedJobs(),
+    jobs: adminPass ? [] : seedJobs(),
     audit: [{ ts: new Date().toISOString(), user: 'system', action: 'seed', jobNo: '', detail: 'Database initialised' }]
   };
 }
@@ -79,9 +93,12 @@ function seedJobs() {
 }
 
 /* ---------- helpers ---------- */
-const SESS = {}; // token -> {userId, ts}
-function newToken() { return crypto.randomBytes(16).toString('hex'); }
-function userByToken(req) { const t = (req.headers['authorization']||'').replace(/^Bearer /,'') || req.headers['x-token']; const s = t && SESS[t]; if(!s) return null; return DB.users.find(u=>u.id===s.userId) || s.user || null; }
+/* Stateless signed session tokens (HMAC). No server-side session store, so logins
+   survive restarts/redeploys and work across replicas. Payload carries id/name/role. */
+function signToken(payload){ const body=Buffer.from(JSON.stringify(payload)).toString('base64url'); const sig=crypto.createHmac('sha256',TOKEN_SECRET).update(body).digest('base64url'); return body+'.'+sig; }
+function verifyTokenStr(tok){ if(!tok||typeof tok!=='string') return null; const i=tok.lastIndexOf('.'); if(i<1) return null; const body=tok.slice(0,i), sig=tok.slice(i+1); const exp=crypto.createHmac('sha256',TOKEN_SECRET).update(body).digest('base64url'); if(sig.length!==exp.length||!crypto.timingSafeEqual(Buffer.from(sig),Buffer.from(exp))) return null; let p; try{ p=JSON.parse(Buffer.from(body,'base64url').toString('utf8')); }catch(e){ return null; } if(p.exp && Date.now()>p.exp) return null; return p; }
+function issueToken(u){ return signToken({ uid:u.id, name:u.name, role:u.role, exp:Date.now()+TOKEN_TTL_MS }); }
+function userByToken(req) { const t=(req.headers['authorization']||'').replace(/^Bearer /,'') || req.headers['x-token']; const p=verifyTokenStr(t); if(!p) return null; return DB.users.find(u=>u.id===p.uid) || { id:p.uid, name:p.name, role:p.role }; }
 function alertAll(title, text){ try{ NOTIFY.alert(CFG, title, text); }catch(e){} EMAIL.send(CFG, { subject:title, text:text }).then(r=>{ if(r && !r.ok && r.error!=='email disabled') console.log('EMAIL send:', r.error); }).catch(()=>{}); }
 function audit(user, action, jobNo, detail) { DB.audit.push({ ts:new Date().toISOString(), user:user?user.id:'anon', action, jobNo:jobNo||'', detail:detail||'' }); if (DB.audit.length>5000) DB.audit = DB.audit.slice(-5000); }
 function completedStages(j){ return [1,2,3,4].filter(n=>j['stage'+n]&&j['stage'+n]._done).length; }
@@ -129,7 +146,8 @@ async function api(req, res, url) {
   const seg = parts.slice(1);
   const method = req.method;
 
-  if (seg[0]==='health') return send(res,200,{ ok:true, org:CFG.orgName, time:new Date().toISOString() });
+  if (seg[0]==='health' && seg[1]==='ready') { const ok = await STORAGE.ready(); return send(res, ok?200:503, { ready:ok, storage:STORAGE.driver }); }
+  if (seg[0]==='health') return send(res,200,{ ok:true, org:CFG.orgName, time:new Date().toISOString(), storage:STORAGE.driver });
 
   if (seg[0]==='login' && method==='POST') {
     const b = await readBody(req);
@@ -138,16 +156,16 @@ async function api(req, res, url) {
       if(b.idToken){ // real Microsoft Entra ID path
         const r = await ENTRA.verifyIdToken(CFG, b.idToken);
         if(!r.ok) return send(res,401,{error:'SSO rejected: '+(r.error||'invalid token')});
-        const u = ssoUser(r.claims.email, r.claims.name); const t=newToken(); SESS[t]={userId:u.id,ts:Date.now(),user:pubUser(u)}; audit(u,'login-sso'); return send(res,200,{ token:t, user:pubUser(u) });
+        const u = ssoUser(r.claims.email, r.claims.name); audit(u,'login-sso'); return send(res,200,{ token:issueToken(u), user:pubUser(u) });
       }
       if(b.email && !(CFG.sso.tenantId && CFG.sso.clientId)){ // demo fallback only when Entra isn't configured
-        const u = verifySso(b.email); if(!u) return send(res,401,{error:'SSO not recognised'}); const t=newToken(); SESS[t]={userId:u.id,ts:Date.now(),user:pubUser(u)}; audit(u,'login-sso-demo'); return send(res,200,{ token:t, user:pubUser(u) });
+        const u = verifySso(b.email); if(!u) return send(res,401,{error:'SSO not recognised'}); audit(u,'login-sso-demo'); return send(res,200,{ token:issueToken(u), user:pubUser(u) });
       }
       return send(res,401,{error:'No id_token supplied'});
     }
     const u = DB.users.find(x=>x.id===String(b.username||'').trim().toLowerCase());
     if (!u || !checkPw(u, String(b.password||''))) return send(res,401,{error:'Invalid username or password'});
-    const t=newToken(); SESS[t]={userId:u.id,ts:Date.now(),user:pubUser(u)}; audit(u,'login'); return send(res,200,{ token:t, user:pubUser(u) });
+    audit(u,'login'); return send(res,200,{ token:issueToken(u), user:pubUser(u) });
   }
   if (seg[0]==='config' && method==='GET') return send(res,200,{ orgName:CFG.orgName, sso:{ enabled:!!(CFG.sso&&CFG.sso.enabled), clientId:(CFG.sso&&CFG.sso.clientId)||'', tenantId:(CFG.sso&&CFG.sso.tenantId)||'' } });
 
@@ -163,12 +181,36 @@ async function api(req, res, url) {
     const j = DB.jobs.find(x=>x.jobNo.toLowerCase()===decodeURIComponent(seg[1]).toLowerCase());
     return j ? send(res,200,j) : send(res,404,{error:'Job not found'});
   }
-  if (seg[0]==='jobs' && method==='POST') {
+  if (seg[0]==='jobs' && method==='POST' && !seg[1]) {
     const b = await readBody(req);
     if(!b.jobNo||!b.machine) return send(res,400,{error:'jobNo and machine required'});
     if(DB.jobs.find(x=>x.jobNo.toLowerCase()===b.jobNo.toLowerCase())) return send(res,409,{error:'Job already exists'});
     const job={ jobNo:b.jobNo, machine:b.machine, customer:b.customer||'StarKist', product:b.product||'', description:b.description||'', created:new Date().toISOString().slice(0,10), stage1:{_done:false},stage2:{_done:false},stage3:{_done:false},stage4:{_done:false} };
     DB.jobs.unshift(job); audit(user,'create-job',job.jobNo); saveDB(); return send(res,200,job);
+  }
+  if (seg[0]==='jobs' && seg[1] && seg[2]==='clone' && method==='POST') {
+    const src = DB.jobs.find(x=>x.jobNo.toLowerCase()===decodeURIComponent(seg[1]).toLowerCase());
+    if(!src) return send(res,404,{error:'Source job not found'});
+    const b=await readBody(req); const newNo=String(b.jobNo||'').trim();
+    if(!newNo) return send(res,400,{error:'New Job # required'});
+    if(DB.jobs.find(x=>x.jobNo.toLowerCase()===newNo.toLowerCase())) return send(res,409,{error:'A job with that number already exists'});
+    const job={ jobNo:newNo, machine:src.machine, customer:src.customer, product:src.product, description:src.description, created:new Date().toISOString().slice(0,10), stage1:{_done:false},stage2:{_done:false},stage3:{_done:false},stage4:{_done:false} };
+    DB.jobs.unshift(job); audit(user,'clone-job',newNo,'from '+src.jobNo); saveDB(); return send(res,200,job);
+  }
+  if (seg[0]==='jobs' && seg[1] && !seg[2] && method==='PUT') {
+    if(!isManager(user)) return send(res,403,{error:'Only a Supervisor, Quality Manager or Administrator can edit job details'});
+    const j = DB.jobs.find(x=>x.jobNo.toLowerCase()===decodeURIComponent(seg[1]).toLowerCase());
+    if(!j) return send(res,404,{error:'Job not found'});
+    const b=await readBody(req);
+    ['customer','product','description'].forEach(k=>{ if(typeof b[k]==='string') j[k]=b[k]; });
+    if(b.machine && DB.masterdata.machines[b.machine] && completedStages(j)===0) j.machine=b.machine;
+    audit(user,'edit-job',j.jobNo); saveDB(); return send(res,200,j);
+  }
+  if (seg[0]==='jobs' && seg[1] && !seg[2] && method==='DELETE') {
+    if(!canManageUsers(user)) return send(res,403,{error:'Only a Quality Manager or Administrator can delete jobs'});
+    const i = DB.jobs.findIndex(x=>x.jobNo.toLowerCase()===decodeURIComponent(seg[1]).toLowerCase());
+    if(i<0) return send(res,404,{error:'Job not found'});
+    const removed=DB.jobs.splice(i,1)[0]; audit(user,'delete-job',removed.jobNo); saveDB(); return send(res,200,{ ok:true });
   }
   if (seg[0]==='jobs' && seg[2]==='stage' && method==='PUT') {
     const j = DB.jobs.find(x=>x.jobNo.toLowerCase()===decodeURIComponent(seg[1]).toLowerCase());
@@ -230,6 +272,18 @@ async function api(req, res, url) {
     return send(res,405,{error:'Method not allowed'});
   }
 
+  if (seg[0]==='admin' && seg[1]==='backups' && method==='GET') {
+    if(!isManager(user)) return send(res,403,{error:'Not permitted'});
+    const dir = process.env.BACKUP_DIR || path.join(DATA_DIR,'backups');
+    try{
+      if(!fs.existsSync(dir)) return send(res,200,{ dir, count:0, latest:null });
+      const walk=(d)=>{ let out=[]; for(const e of fs.readdirSync(d,{withFileTypes:true})){ if(e.isSymbolicLink()) continue; const p=path.join(d,e.name); if(e.isDirectory()) out=out.concat(walk(p)); else out.push(p); } return out; };
+      const files=walk(dir).filter(f=>/\.(sql|gz|json|dump)$/i.test(f)).map(f=>{ const s=fs.statSync(f); return { name:path.basename(f), size:s.size, mtime:s.mtimeMs }; }).sort((a,b)=>b.mtime-a.mtime);
+      const l=files[0];
+      return send(res,200,{ dir, count:files.length, latest: l ? { name:l.name, sizeKB:Math.round(l.size/1024), ageHours:Math.round((Date.now()-l.mtime)/3600000) } : null });
+    }catch(e){ return send(res,200,{ dir, error:String(e.message||e) }); }
+  }
+
   if (seg[0]==='audit' && method==='GET') return send(res,200, DB.audit.slice(-300).reverse());
 
   if (seg[0]==='bc' && seg[1]==='job' && method==='GET') { const r = await BC.lookupJob(CFG, decodeURIComponent(seg[2]||'')); return send(res, r.error?502:200, r); }
@@ -266,7 +320,7 @@ async function api(req, res, url) {
 }
 function pubUser(u){ return { id:u.id, name:u.name, role:u.role }; }
 /* Resolve a verified SSO e-mail to a user: known users keep their role; unknown domain
-   users get least-privilege QA Officer (not persisted — see SESS fallback in userByToken). */
+   users get least-privilege QA Officer (carried in the signed token, not persisted to DB). */
 function ssoUser(email, name){ const id=String(email).split('@')[0].toLowerCase(); return DB.users.find(u=>u.id===id) || { id, name:name||email.split('@')[0], role:'QA Officer' }; }
 function verifySso(email){ if(!email) return null; const dom='@'+CFG.sso.allowedDomain; if(!String(email).toLowerCase().endsWith(dom)) return null; return ssoUser(email); }
 
@@ -311,8 +365,6 @@ function digestHtml(d){
 }
 
 /* ---------- HTTP server ---------- */
-loadDB();
-if(!USE_SQLITE) BACKUP.scheduleBackups({ dbFile: DB_FILE, backupDir: path.join(DATA_DIR,'backups'), intervalMin:(CFG.backup&&CFG.backup.intervalMin)||180, keep:(CFG.backup&&CFG.backup.keep)||48 });
 const server = http.createServer((req,res)=>{
   const url = new URL(req.url, 'http://x');
   if (url.pathname.startsWith('/api/')) return api(req,res,url).catch(e=>{ console.error(e); send(res,500,{error:String(e)}); });
@@ -323,5 +375,18 @@ const server = http.createServer((req,res)=>{
   fs.existsSync(filePath) ? serveStatic(res, filePath) : serveStatic(res, path.join(PUB,'index.html'));
 });
 const PORT = process.env.PORT || CFG.port;
-server.listen(PORT, CFG.host, ()=> console.log('Golden QA server on http://'+CFG.host+':'+PORT+'  ('+CFG.orgName+')'));
+const HOST = process.env.HOST || CFG.host;
+
+let _shuttingDown = false;
+function shutdown(sig){ if(_shuttingDown) return; _shuttingDown=true; console.log('Shutting down ('+sig+')…'); server.close(async ()=>{ try{ await _saveChain; }catch(e){} try{ await Promise.resolve(STORAGE.close && STORAGE.close()); }catch(e){} process.exit(0); }); setTimeout(()=>process.exit(0), 8000).unref(); }
+process.on('SIGTERM', ()=>shutdown('SIGTERM'));
+process.on('SIGINT', ()=>shutdown('SIGINT'));
+
+(async ()=>{
+  try { await loadDB(); }
+  catch(e){ console.error('FATAL: database init failed —', e && e.message); process.exit(1); }
+  if (STORAGE.driver === 'json') BACKUP.scheduleBackups({ dbFile: DB_FILE, backupDir: path.join(DATA_DIR,'backups'), intervalMin:(CFG.backup&&CFG.backup.intervalMin)||180, keep:(CFG.backup&&CFG.backup.keep)||48 });
+  server.listen(PORT, HOST, ()=> console.log('Golden QA server on http://'+HOST+':'+PORT+'  ('+CFG.orgName+')  [storage: '+STORAGE.driver+']'));
+})();
+
 module.exports = { server };
