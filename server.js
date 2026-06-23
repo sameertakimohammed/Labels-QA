@@ -44,6 +44,7 @@ async function loadDB() {
   if (loaded) DB = loaded; else { DB = seedDB(); await STORAGE.save(DB); }
   // forward-compat shims for databases created before these collections existed
   if (!Array.isArray(DB.capas)) DB.capas = [];
+  if (!Array.isArray(DB.ncrs)) DB.ncrs = [];
   if (!Array.isArray(DB.equipment)) DB.equipment = [];
   if (!Array.isArray(DB.apikeys)) DB.apikeys = [];
   if (!Array.isArray(DB.webhooks)) DB.webhooks = [];
@@ -51,12 +52,14 @@ async function loadDB() {
   if (typeof DB.auditAnchor !== 'string') DB.auditAnchor = '';
   if (!DB.masterdata) DB.masterdata = {};
   if (!DB.masterdata.targets) DB.masterdata.targets = { fpyMin: 95, openCapasMax: 5, overdueCalMax: 0, holdRejectMax: 2 };
+  if (typeof DB.masterdata.competencyEnforced !== 'boolean') DB.masterdata.competencyEnforced = false;
+  (DB.users || []).forEach(u => { if (!Array.isArray(u.qualifiedStages)) u.qualifiedStages = []; });
 }
 let _saveChain = Promise.resolve();
 function saveDB() { _saveChain = _saveChain.then(() => STORAGE.save(DB)).catch(e => console.error('saveDB failed:', e && e.message)); return _saveChain; }
 function hashPw(pw, salt) { return crypto.scryptSync(String(pw), salt, 64).toString('hex'); }
 function checkPw(u, pw) { if (!u || !u.passHash) return false; const h = hashPw(pw, u.salt); return h.length === u.passHash.length && crypto.timingSafeEqual(Buffer.from(h), Buffer.from(u.passHash)); }
-function mkUser(id, name, role, pw) { const salt = crypto.randomBytes(16).toString('hex'); return { id, name, role, salt, passHash: hashPw(pw, salt) }; }
+function mkUser(id, name, role, pw, qs) { const salt = crypto.randomBytes(16).toString('hex'); return { id, name, role, salt, passHash: hashPw(pw, salt), qualifiedStages: Array.isArray(qs) ? qs : [] }; }
 
 function seedDB() {
   const adminUser = (process.env.ADMIN_USERNAME || 'admin').toLowerCase();
@@ -65,11 +68,11 @@ function seedDB() {
   // Production (ADMIN_PASSWORD set): seed a single admin, no demo data. Dev: seed the demo users + jobs.
   const users = adminPass
     ? [ mkUser(adminUser, 'Administrator', 'Administrator', adminPass) ]
-    : [ mkUser('akumar', 'A. Kumar', 'QA Officer', 'kumar123'),
-        mkUser('pdevi', 'P. Devi', 'QA Officer', 'devi123'),
-        mkUser('rprasad', 'R. Prasad', 'Supervisor', 'prasad123'),
-        mkUser('ateet', 'Ateet Roshan', 'Quality Manager', 'ateet123'),
-        mkUser('admin', 'Administrator', 'Administrator', 'admin123') ];
+    : [ mkUser('akumar', 'A. Kumar', 'QA Officer', 'kumar123', [1,2,3,4]),
+        mkUser('pdevi', 'P. Devi', 'QA Officer', 'devi123', [1,2]),
+        mkUser('rprasad', 'R. Prasad', 'Supervisor', 'prasad123', [1,2,3,4]),
+        mkUser('ateet', 'Ateet Roshan', 'Quality Manager', 'ateet123', [1,2,3,4]),
+        mkUser('admin', 'Administrator', 'Administrator', 'admin123', [1,2,3,4]) ];
   return {
     users,
     masterdata: {
@@ -81,10 +84,12 @@ function seedDB() {
       defectTypes: ['Hickey','Mis-register','Ink splash','Bubble','Streak','Scratch','Colour variation','Die-cut error','Lamination defect','Foreign matter'],
       products: ['Chunk Light Tuna 142g Wrap Label','Solid White Albacore 198g Label','Chunk Light 85g Wrap Label'],
       tolerances: CFG.tolerances,
-      targets: { fpyMin: 95, openCapasMax: 5, overdueCalMax: 0, holdRejectMax: 2 }
+      targets: { fpyMin: 95, openCapasMax: 5, overdueCalMax: 0, holdRejectMax: 2 },
+      competencyEnforced: false
     },
     jobs: adminPass ? [] : seedJobs(),
     capas: adminPass ? [] : seedCapas(),
+    ncrs: adminPass ? [] : seedNcrs(),
     equipment: adminPass ? [] : seedEquipment(),
     apikeys: [],
     webhooks: [],
@@ -96,6 +101,9 @@ function seedCapas() {
   return [ { id:'CAPA-24817-1', jobNo:'SK-24817', title:'Recurring hickeys on Station 1', source:'Reel Inspection (F-021)', severity:'Medium', status:'Open',
     rootCause:'Worn anilox roller depositing debris during the run.', correctiveAction:'Swap the 360 anilox on Station 1 and re-run a 500 m verification reel.', preventiveAction:'Add an anilox-condition check to the weekly preventive-maintenance sheet.',
     owner:'ateet', dueDate:'2026-06-30', createdBy:'akumar', createdAt:'2026-06-19T03:00:00.000Z', updatedAt:'2026-06-19T03:00:00.000Z', closedBy:'', closedAt:'' } ];
+}
+function seedNcrs() {
+  return [ { id:'NCR-24817-1', jobNo:'SK-24817', date:'2026-06-18', description:'Hickeys found on Station 1 print during reel inspection.', disposition:'Rework', severity:'Medium', status:'Closed', capaId:'CAPA-24817-1', createdBy:'akumar', createdAt:'2026-06-18T22:00:00.000Z', closedBy:'ateet', closedAt:'2026-06-19T03:30:00.000Z' } ];
 }
 function seedEquipment() {
   const now=new Date().toISOString(); const cal=(daysAgo)=>addDaysYmd(ymd(new Date()), -daysAgo);
@@ -174,6 +182,9 @@ const CAPA_STATUS = ['Open','In Progress','Closed'];
 const EQUIP_TYPES = ['Machine','Anilox','Gauge','Verifier','Scale','Other'];
 const CAL_DUE_SOON_DAYS = Number((CFG.quality && CFG.quality.calDueSoonDays)) || 14;
 const WEBHOOK_EVENTS = ['job.released','job.hold','capa.opened','capa.closed','equipment.calibrated'];
+const NCR_DISPOSITION = ['Use as is','Rework','Reject','Return to supplier','Scrap'];
+const NCR_STATUS = ['Open','Closed'];
+const CAPA_EFFECTIVENESS = ['','Pending','Verified','Not effective'];
 
 /* date helpers (UTC, YYYY-MM-DD) */
 function ymd(d){ return d.toISOString().slice(0,10); }
@@ -336,6 +347,8 @@ async function api(req, res, url) {
       if(prev>=1 && !(j['stage'+prev] && j['stage'+prev]._done)) return send(res,409,{error:'Complete Stage '+prev+' before completing Stage '+n});
       const miss = validateComplete(n, b.data);
       if(miss.length) return send(res,400,{error:'Cannot mark complete — missing: '+miss.join(', '), missing:miss});
+      if(DB.masterdata.competencyEnforced && user.role!=='Administrator' && !(user.qualifiedStages||[]).map(Number).includes(Number(n)))
+        return send(res,403,{error:'You are not qualified to sign off Stage '+n+'. Ask an administrator to add this stage to your competencies.'});
     }
     j['stage'+n] = b.data || {};
     if(n==='4' && b.data && b.data._done && b.data.statusFinal){ j.statusOverride = b.data.statusFinal==='Released'?'Released':'Hold'; if(j.statusOverride!=='Released'){ alertAll('Job '+j.jobNo+' set to '+j.statusOverride,'Stage 4 decision: '+b.data.statusFinal+' (qty '+(b.data.rejectedQty||'?')+')'); } fireEvent(j.statusOverride==='Released'?'job.released':'job.hold',{ jobNo:j.jobNo, product:j.product, decision:b.data.statusFinal }); }
@@ -368,13 +381,15 @@ async function api(req, res, url) {
       if(!id||!String(b.name||'').trim()||!String(b.role||'').trim()) return send(res,400,{error:'User id, name and role are required'});
       if(String(b.password||'').length<6) return send(res,400,{error:'Password must be at least 6 characters'});
       if(DB.users.find(u=>u.id===id)) return send(res,409,{error:'A user with that id already exists'});
-      DB.users.push(mkUser(id, String(b.name).trim(), String(b.role).trim(), String(b.password))); audit(user,'create-user','',id); saveDB();
+      const qs=Array.isArray(b.qualifiedStages)?b.qualifiedStages.map(Number).filter(x=>x>=1&&x<=4):[];
+      DB.users.push(mkUser(id, String(b.name).trim(), String(b.role).trim(), String(b.password), qs)); audit(user,'create-user','',id); saveDB();
       return send(res,200,{ ok:true, users:DB.users.map(pubUser) });
     }
     if(uid && method==='PUT'){
       const b=await readBody(req); const u=DB.users.find(x=>x.id===uid); if(!u) return send(res,404,{error:'User not found'});
       if(String(b.name||'').trim()) u.name=String(b.name).trim();
       if(String(b.role||'').trim()) u.role=String(b.role).trim();
+      if(Array.isArray(b.qualifiedStages)) u.qualifiedStages=b.qualifiedStages.map(Number).filter(x=>x>=1&&x<=4);
       if(b.password){ if(String(b.password).length<6) return send(res,400,{error:'Password must be at least 6 characters'}); u.salt=crypto.randomBytes(16).toString('hex'); u.passHash=hashPw(String(b.password),u.salt); }
       audit(user,'update-user','',uid); saveDB(); return send(res,200,{ ok:true, users:DB.users.map(pubUser) });
     }
@@ -462,7 +477,7 @@ async function api(req, res, url) {
     const c={ id:'CAPA-'+Date.now().toString(36).toUpperCase(), jobNo:String(b.jobNo||'').trim(), title:String(b.title).trim(),
       source:String(b.source||'').trim(), severity:CAPA_SEVERITY.includes(b.severity)?b.severity:'Medium', status:'Open',
       rootCause:String(b.rootCause||''), correctiveAction:String(b.correctiveAction||''), preventiveAction:String(b.preventiveAction||''),
-      owner:String(b.owner||'').trim(), dueDate:String(b.dueDate||'').trim(), createdBy:user.id, createdAt:now, updatedAt:now, closedBy:'', closedAt:'' };
+      owner:String(b.owner||'').trim(), dueDate:String(b.dueDate||'').trim(), effectiveness:'', verifiedBy:'', verifiedAt:'', escalated:false, escalatedAt:'', createdBy:user.id, createdAt:now, updatedAt:now, closedBy:'', closedAt:'' };
     DB.capas.push(c); audit(user,'capa-open',c.jobNo,c.id+': '+c.title); fireEvent('capa.opened',{ id:c.id, jobNo:c.jobNo, title:c.title, severity:c.severity }); saveDB(); return send(res,200,c);
   }
   if (seg[0]==='capas' && seg[1] && method==='PUT') {
@@ -476,8 +491,45 @@ async function api(req, res, url) {
       if(c.status==='Closed' && !wasClosed){ c.closedBy=user.id; c.closedAt=new Date().toISOString(); fireEvent('capa.closed',{ id:c.id, jobNo:c.jobNo }); }
       if(c.status!=='Closed'){ c.closedBy=''; c.closedAt=''; }
     }
+    if(b.effectiveness!=null && CAPA_EFFECTIVENESS.includes(b.effectiveness)){ c.effectiveness=b.effectiveness; if(b.effectiveness==='Verified'||b.effectiveness==='Not effective'){ c.verifiedBy=user.id; c.verifiedAt=new Date().toISOString(); } else { c.verifiedBy=''; c.verifiedAt=''; } }
     c.updatedAt=new Date().toISOString();
     audit(user, c.status==='Closed'?'capa-close':'capa-update', c.jobNo, c.id); saveDB(); return send(res,200,c);
+  }
+
+  if (seg[0]==='ncrs' && method==='GET' && !seg[1]) {
+    let list=(DB.ncrs||[]).slice();
+    const fs_=url.searchParams.get('status'); if(fs_) list=list.filter(x=>x.status===fs_);
+    const fj=url.searchParams.get('jobNo'); if(fj) list=list.filter(x=>String(x.jobNo||'').toLowerCase()===fj.toLowerCase());
+    return send(res,200, list.reverse());
+  }
+  if (seg[0]==='ncrs' && method==='POST' && !seg[1]) {
+    if(!isManager(user)) return send(res,403,{error:'Only a Supervisor, Quality Manager or Administrator can raise an NCR'});
+    const b=await readBody(req); if(!String(b.description||'').trim()) return send(res,400,{error:'A description is required'});
+    const now=new Date().toISOString();
+    const x={ id:'NCR-'+Date.now().toString(36).toUpperCase(), jobNo:String(b.jobNo||'').trim(), date:String(b.date||'').trim()||ymd(new Date()),
+      description:String(b.description).trim(), disposition:NCR_DISPOSITION.includes(b.disposition)?b.disposition:'Rework',
+      severity:CAPA_SEVERITY.includes(b.severity)?b.severity:'Medium', status:'Open', capaId:'', createdBy:user.id, createdAt:now, closedBy:'', closedAt:'' };
+    DB.ncrs.push(x); audit(user,'ncr-open',x.jobNo,x.id); saveDB(); return send(res,200,x);
+  }
+  if (seg[0]==='ncrs' && seg[1] && seg[2]==='capa' && method==='POST') {
+    if(!isManager(user)) return send(res,403,{error:'Not permitted'});
+    const x=(DB.ncrs||[]).find(y=>y.id===decodeURIComponent(seg[1])); if(!x) return send(res,404,{error:'NCR not found'});
+    if(x.capaId) return send(res,409,{error:'This NCR already has a linked CAPA ('+x.capaId+')'});
+    const now=new Date().toISOString();
+    const c={ id:'CAPA-'+Date.now().toString(36).toUpperCase(), jobNo:x.jobNo, title:'NCR '+x.id+': '+x.description.slice(0,80), source:'NCR '+x.id, severity:x.severity, status:'Open',
+      rootCause:'', correctiveAction:'', preventiveAction:'', owner:'', dueDate:'', effectiveness:'', verifiedBy:'', verifiedAt:'', escalated:false, escalatedAt:'', createdBy:user.id, createdAt:now, updatedAt:now, closedBy:'', closedAt:'' };
+    DB.capas.push(c); x.capaId=c.id; audit(user,'ncr-to-capa',x.jobNo,x.id+' -> '+c.id); fireEvent('capa.opened',{ id:c.id, jobNo:c.jobNo, title:c.title, severity:c.severity }); saveDB();
+    return send(res,200,{ ok:true, ncr:x, capa:c });
+  }
+  if (seg[0]==='ncrs' && seg[1] && method==='PUT') {
+    if(!isManager(user)) return send(res,403,{error:'Not permitted'});
+    const x=(DB.ncrs||[]).find(y=>y.id===decodeURIComponent(seg[1])); if(!x) return send(res,404,{error:'NCR not found'});
+    const b=await readBody(req);
+    ['jobNo','date','description'].forEach(k=>{ if(typeof b[k]==='string') x[k]=b[k]; });
+    if(b.disposition && NCR_DISPOSITION.includes(b.disposition)) x.disposition=b.disposition;
+    if(b.severity && CAPA_SEVERITY.includes(b.severity)) x.severity=b.severity;
+    if(b.status && NCR_STATUS.includes(b.status)){ const wasClosed=x.status==='Closed'; x.status=b.status; if(x.status==='Closed'&&!wasClosed){ x.closedBy=user.id; x.closedAt=new Date().toISOString(); } if(x.status!=='Closed'){ x.closedBy=''; x.closedAt=''; } }
+    audit(user,'ncr-update',x.jobNo,x.id); saveDB(); return send(res,200,x);
   }
 
   if (seg[0]==='equipment' && method==='GET' && !seg[1]) {
@@ -556,7 +608,7 @@ async function api(req, res, url) {
 
   return send(res,404,{error:'Unknown API route'});
 }
-function pubUser(u){ return { id:u.id, name:u.name, role:u.role }; }
+function pubUser(u){ return { id:u.id, name:u.name, role:u.role, qualifiedStages:Array.isArray(u.qualifiedStages)?u.qualifiedStages:[] }; }
 /* Resolve a verified SSO e-mail to a user: known users keep their role; unknown domain
    users get least-privilege QA Officer (carried in the signed token, not persisted to DB). */
 function ssoUser(email, name){ const id=String(email).split('@')[0].toLowerCase(); return DB.users.find(u=>u.id===id) || { id, name:name||email.split('@')[0], role:'QA Officer' }; }
@@ -659,6 +711,15 @@ function suppliers(){
   });
   return Object.values(map).map(m=>({ supplier:m.supplier, jobs:m.jobs, released:m.released, holdReject:m.holdReject, defectKg:round(m.defectKg,2), wasteKg:round(m.wasteKg,2), fpy:m.jobs?Math.round(m.released/m.jobs*100):0 })).sort((a,b)=>b.jobs-a.jobs);
 }
+/* CAPA SLA: alert once (Teams/email) when an open CAPA passes its due date. */
+function checkCapaSla(){
+  try{
+    const today=ymd(new Date()); let changed=false; const newly=[];
+    (DB.capas||[]).forEach(c=>{ if(c.status!=='Closed' && c.dueDate && c.dueDate<today && !c.escalated){ c.escalated=true; c.escalatedAt=new Date().toISOString(); changed=true; newly.push(c); audit(null,'capa-escalate',c.jobNo,c.id+' overdue (due '+c.dueDate+')'); } });
+    if(newly.length) alertAll('Golden QA — '+newly.length+' CAPA(s) overdue', newly.map(c=>c.id+' — '+c.title+' (due '+c.dueDate+(c.owner?', owner '+c.owner:'')+')').join('\n'));
+    if(changed) saveDB();
+  }catch(e){ console.warn('CAPA SLA check failed:', e && e.message); }
+}
 
 /* ---------- manager digest (emailed / Teams) ---------- */
 function buildDigest(){
@@ -720,6 +781,7 @@ process.on('SIGINT', ()=>shutdown('SIGINT'));
   try { await loadDB(); }
   catch(e){ console.error('FATAL: database init failed —', e && e.message); process.exit(1); }
   if (STORAGE.driver === 'json') BACKUP.scheduleBackups({ dbFile: DB_FILE, backupDir: path.join(DATA_DIR,'backups'), intervalMin:(CFG.backup&&CFG.backup.intervalMin)||180, keep:(CFG.backup&&CFG.backup.keep)||48 });
+  const slaTimer = setInterval(checkCapaSla, 60*60000); if (slaTimer.unref) slaTimer.unref(); checkCapaSla();
   server.listen(PORT, HOST, ()=> console.log('Golden QA server on http://'+HOST+':'+PORT+'  ('+CFG.orgName+')  [storage: '+STORAGE.driver+']'));
 })();
 

@@ -386,6 +386,47 @@ async function main() {
       Array.isArray(r.body) && (r.body.length === 0 || (typeof r.body[0].fpy === 'number' && typeof r.body[0].jobs === 'number')),
       JSON.stringify(r.body && r.body.length));
 
+    // 26. NCR -> CAPA workflow
+    r = await request('POST', '/api/ncrs', { jobNo: JOB, description: 'Smoke NCR ' + PID, disposition: 'Rework', severity: 'High' }, adminToken);
+    eq('POST /api/ncrs -> 200', r.status, 200);
+    const ncrId = r.body && r.body.id;
+    ok('NCR created Open with no CAPA yet', !!(ncrId && r.body.status === 'Open' && !r.body.capaId), JSON.stringify(r.body && { s: r.body.status, capa: r.body.capaId }));
+    r = await request('POST', '/api/ncrs', { jobNo: JOB }, adminToken);
+    eq('NCR without description -> 400', r.status, 400);
+    r = await request('POST', '/api/ncrs/' + encodeURIComponent(ncrId) + '/capa', undefined, adminToken);
+    eq('promote NCR to CAPA -> 200', r.status, 200);
+    ok('promote links a CAPA back to the NCR', !!(r.body && r.body.capa && r.body.capa.id && r.body.ncr.capaId === r.body.capa.id), JSON.stringify(r.body && r.body.ncr));
+    r = await request('POST', '/api/ncrs/' + encodeURIComponent(ncrId) + '/capa', undefined, adminToken);
+    eq('double promote -> 409', r.status, 409);
+    r = await request('POST', '/api/ncrs', { description: 'x' }, officerToken);
+    eq('non-manager POST /api/ncrs -> 403', r.status, 403);
+
+    // 27. CAPA effectiveness verification
+    r = await request('POST', '/api/capas', { title: 'Eff ' + PID }, adminToken);
+    const effCapa = r.body && r.body.id;
+    r = await request('PUT', '/api/capas/' + encodeURIComponent(effCapa), { status: 'Closed', effectiveness: 'Verified' }, adminToken);
+    eq('CAPA effectiveness verify -> 200', r.status, 200);
+    ok('effectiveness recorded with verifier', !!(r.body && r.body.effectiveness === 'Verified' && r.body.verifiedBy === 'admin' && r.body.verifiedAt), JSON.stringify(r.body && { e: r.body.effectiveness, by: r.body.verifiedBy }));
+
+    // 28. competency gating (opt-in)
+    r = await request('GET', '/api/admin/users', undefined, adminToken);
+    ok('users expose qualifiedStages', Array.isArray(r.body) && r.body.every((u) => Array.isArray(u.qualifiedStages)), JSON.stringify(r.body && r.body[0]));
+    await request('PUT', '/api/masterdata', { competencyEnforced: true }, adminToken);
+    const compU = 'comp' + PID;
+    await request('POST', '/api/admin/users', { id: compU, name: 'Comp Officer', role: 'QA Officer', password: 'secret123', qualifiedStages: [1] }, adminToken);
+    let cr = await request('POST', '/api/login', { username: compU, password: 'secret123' });
+    const compTok = cr.body && cr.body.token;
+    const cjob = 'COMP-' + PID;
+    await request('POST', '/api/jobs', { jobNo: cjob, machine: 'Flexo450' }, adminToken);
+    r = await request('PUT', '/api/jobs/' + encodeURIComponent(cjob) + '/stage/1', { data: { _done: true, date: '2026-06-23', qaOfficer: 'Comp', proceed: 'Yes', materialType: 'BOPP' } }, compTok);
+    eq('qualified stage-1 complete -> 200', r.status, 200);
+    r = await request('PUT', '/api/jobs/' + encodeURIComponent(cjob) + '/stage/2', { data: { _done: true, date: '2026-06-23', qaOfficer: 'Comp', rows: [{ totalMeters: '100' }] } }, compTok);
+    eq('unqualified stage-2 complete -> 403', r.status, 403);
+    r = await request('PUT', '/api/jobs/' + encodeURIComponent(cjob) + '/stage/2', { data: { _done: true, date: '2026-06-23', qaOfficer: 'Admin', rows: [{ totalMeters: '100' }] } }, adminToken);
+    eq('admin bypass stage-2 -> 200', r.status, 200);
+    await request('PUT', '/api/masterdata', { competencyEnforced: false }, adminToken);
+    await request('DELETE', '/api/admin/users/' + encodeURIComponent(compU), undefined, adminToken);
+
   } catch (e) {
     failed++;
     console.log('FAIL  unexpected error during run -> ' + (e && e.stack ? e.stack : e));

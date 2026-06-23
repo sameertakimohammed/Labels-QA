@@ -11,7 +11,7 @@ const NAV = [
     {v:"entry",label:"Data Entry",icon:"edit"},
     {v:"lookup",label:"Job Lookup",icon:"search"}
   ]},
-  { group:"Quality", items:[ {v:"capa",label:"CAPA",icon:"capa"}, {v:"equip",label:"Equipment",icon:"equip"}, {v:"spc",label:"SPC",icon:"spc"} ]},
+  { group:"Quality", items:[ {v:"capa",label:"CAPA",icon:"capa"}, {v:"ncr",label:"NCR",icon:"ncr"}, {v:"equip",label:"Equipment",icon:"equip"}, {v:"spc",label:"SPC",icon:"spc"} ]},
   { group:"Reports", items:[ {v:"reports",label:"Reports",icon:"chart"}, {v:"suppliers",label:"Suppliers",icon:"truck"} ]},
   { group:"Settings", items:[
     {v:"team",label:"Team & Access",icon:"users",mgr:true},
@@ -36,7 +36,8 @@ const ICONS = {
   equip:"M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z",
   plug:"M18 8a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM6 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM18 22a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM8.6 13.5l6.8 3.9M15.4 6.6 8.6 10.5",
   spc:"M3 3v18h18M7 15l3-4 3 3 4-6",
-  truck:"M1 3h15v13H1zM16 8h4l3 3v5h-7M5.5 19a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3zM18.5 19a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3z"
+  truck:"M1 3h15v13H1zM16 8h4l3 3v5h-7M5.5 19a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3zM18.5 19a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3z",
+  ncr:"M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0zM12 9v4M12 17h.01"
 };
 function ic(n){ return `<svg class="nav-ic" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="${ICONS[n]||''}"/></svg>`; }
 const STAGES = [
@@ -170,7 +171,7 @@ function go(view,opts={}){ CUR.view=view; if(opts.jobNo!==undefined)CUR.jobNo=op
   document.querySelectorAll('#sidebar button[data-view]').forEach(b=>b.classList.toggle("active",b.dataset.view===view)); closeNav(); render(); }
 function render(){ const v=CUR.view;
   if(v==="dashboard")dashboard(); else if(v==="new")newJob(); else if(v==="entry")entry(); else if(v==="lookup")lookup();
-  else if(v==="exec")execDashboard(); else if(v==="capa")capaPage(); else if(v==="equip")equipmentPage(); else if(v==="spc")spcPage(); else if(v==="reports")reports(); else if(v==="suppliers")suppliersPage(); else if(v==="team")team(); else if(v==="audit")auditTrail(); else if(v==="integrations")integrationsPage(); else if(v==="settings")settings(); else if(v==="account")myAccount();
+  else if(v==="exec")execDashboard(); else if(v==="capa")capaPage(); else if(v==="ncr")ncrPage(); else if(v==="equip")equipmentPage(); else if(v==="spc")spcPage(); else if(v==="reports")reports(); else if(v==="suppliers")suppliersPage(); else if(v==="team")team(); else if(v==="audit")auditTrail(); else if(v==="integrations")integrationsPage(); else if(v==="settings")settings(); else if(v==="account")myAccount();
   else dashboard(); }
 
 /* ---------- dashboard ---------- */
@@ -536,8 +537,9 @@ function capaModal(id, prefill){
       <div class="field"><label>Owner</label><input id="ca_owner" value="${esc(c?c.owner:'')}" placeholder="who's responsible"></div>
       <div class="field"><label>Due date</label><input id="ca_due" type="date" value="${esc(c?c.dueDate:'')}"></div>
       ${c?`<div class="field"><label>Status</label><select id="ca_status">${stOpts}</select></div>`:''}
+      ${c?`<div class="field"><label>Effectiveness</label><select id="ca_eff">${["","Pending","Verified","Not effective"].map(o=>`<option value="${o}" ${c.effectiveness===o?'selected':''}>${o||'(not set)'}</option>`).join("")}</select></div>`:''}
     </div>
-    ${c&&c.closedAt?`<p class="sub">Closed by ${esc(c.closedBy)} on ${esc(c.closedAt.slice(0,10))}.</p>`:''}
+    ${c&&c.closedAt?`<p class="sub">Closed by ${esc(c.closedBy)} on ${esc(c.closedAt.slice(0,10))}.${c.verifiedAt?(' Effectiveness '+esc(c.effectiveness)+' by '+esc(c.verifiedBy)+' on '+esc(c.verifiedAt.slice(0,10))+'.'):''}</p>`:''}
     <div class="row-actions"><button class="btn gold" onclick="saveCapa(${c?`'${jsq(c.id)}'`:'null'})">Save</button><button class="btn ghost" onclick="closeModal()">Cancel</button></div></div></div>`;
 }
 async function saveCapa(id){
@@ -545,11 +547,54 @@ async function saveCapa(id){
     rootCause:val("ca_root"), correctiveAction:val("ca_corr"), preventiveAction:val("ca_prev"), owner:val("ca_owner").trim(), dueDate:val("ca_due") };
   if(!body.title){ toast("A CAPA title is required"); return; }
   const stSel=document.getElementById("ca_status"); if(stSel) body.status=stSel.value;
+  const effSel=document.getElementById("ca_eff"); if(effSel) body.effectiveness=effSel.value;
   try{ if(id) await api("/api/capas/"+encodeURIComponent(id),{method:"PUT",body}); else await api("/api/capas",{method:"POST",body});
     closeModal(); toast("CAPA saved"); capaPage();
   }catch(e){ toast(e.message); }
 }
 function raiseCapaFor(no){ const ov=JOB&&JOB.statusOverride; capaModal(null,{ jobNo:no, severity:(ov==='Hold'||ov==='Rejected')?'High':'Medium', source:ov?('Job '+ov):'In-process inspection' }); }
+
+/* NCR — non-conformance reports */
+function ncrStatusPill(s){ return `<span class="pill ${s==='Closed'?'green':'amber'}">${esc(s)}</span>`; }
+async function ncrPage(){
+  const canManage=isMgrRole();
+  app().innerHTML=`<div class="empty">Loading…</div>`;
+  let list=[]; try{ list=await api("/api/ncrs"); }catch(e){ app().innerHTML=`<div class="card"><div class="empty">Could not load NCRs — ${esc(e.message)}</div></div>`; return; }
+  window._ncrs=list;
+  const open=list.filter(n=>n.status!=='Closed').length;
+  app().innerHTML=`<div class="card"><div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+      <div><h2 style="margin:0">Non-Conformance Reports</h2><p class="sub" style="margin:4px 0 0">${open} open of ${list.length}. Promote an NCR to a CAPA to drive corrective action.</p></div>
+      <div style="margin-left:auto" class="no-print">${canManage?`<button class="btn gold" onclick="ncrModal()">+ Raise NCR</button>`:''}</div></div>
+    <div class="grid g3 no-print" style="margin:4px 0 14px"><div class="field"><label>Status</label><select id="nc_status" onchange="renderNcrRows()"><option value="">All</option><option>Open</option><option>Closed</option></select></div><div class="field"><label>Search</label><input id="nc_q" placeholder="NCR #, job, text" oninput="renderNcrRows()"></div></div>
+    ${list.length?`<div style="overflow-x:auto"><table><thead><tr><th>NCR</th><th>Job</th><th>Date</th><th>Description</th><th>Disposition</th><th>Severity</th><th>CAPA</th><th>Status</th>${canManage?'<th class="no-print"></th>':''}</tr></thead><tbody id="ncbody"></tbody></table></div><div class="empty hidden" id="ncempty" style="padding:18px">No NCRs match the filter.</div>`:`<div class="empty">No NCRs yet.${canManage?' Raise one when an inspection finds a nonconformance.':''}</div>`}</div>`;
+  if(list.length) renderNcrRows();
+}
+function renderNcrRows(){
+  const canManage=isMgrRole(); const st=val("nc_status"), q=(val("nc_q")||"").toLowerCase().trim();
+  let list=(window._ncrs||[]);
+  if(st) list=list.filter(n=>n.status===st);
+  if(q) list=list.filter(n=>((n.id||"")+" "+(n.jobNo||"")+" "+(n.description||"")).toLowerCase().includes(q));
+  const tb=$("#ncbody"); if(!tb)return;
+  tb.innerHTML=list.map(n=>`<tr><td><b>${esc(n.id)}</b></td><td>${n.jobNo?`<button class="btn ghost sm" onclick="go('lookup',{jobNo:'${jsq(n.jobNo)}'})">${esc(n.jobNo)}</button>`:'—'}</td><td>${esc(n.date)}</td><td>${esc(n.description)}</td><td>${esc(n.disposition)}</td><td>${capaSevPill(n.severity)}</td><td>${n.capaId?`<button class="btn ghost sm" onclick="go('capa')">${esc(n.capaId)}</button>`:(canManage?`<button class="btn ghost sm" onclick="promoteNcr('${jsq(n.id)}')">Raise CAPA</button>`:'—')}</td><td>${ncrStatusPill(n.status)}</td>${canManage?`<td class="no-print"><button class="btn ghost sm" onclick="ncrModal('${jsq(n.id)}')">Edit</button></td>`:''}</tr>`).join("");
+  const e=$("#ncempty"); if(e)e.classList.toggle("hidden",!!list.length);
+}
+function ncrModal(id){
+  const n=id?(window._ncrs||[]).find(x=>x.id===id):null;
+  const dispOpts=["Use as is","Rework","Reject","Return to supplier","Scrap"].map(d=>`<option ${n&&n.disposition===d?'selected':''}>${d}</option>`).join("");
+  const sevOpts=["Low","Medium","High","Critical"].map(s=>`<option ${(n?n.severity:'Medium')===s?'selected':''}>${s}</option>`).join("");
+  const stOpts=["Open","Closed"].map(s=>`<option ${n&&n.status===s?'selected':''}>${s}</option>`).join("");
+  $("#modalRoot").innerHTML=`<div class="modal-bg"><div class="modal"><h2>${n?esc(n.id):'Raise NCR'}</h2>
+    <div class="grid g2"><div class="field"><label>Job #</label><input id="nc_job" value="${esc(n?n.jobNo:'')}"></div><div class="field"><label>Date</label><input id="nc_date" type="date" value="${esc(n?n.date:new Date().toISOString().slice(0,10))}"></div></div>
+    <div class="field"><label>Description <span class="req">*</span></label><textarea id="nc_desc">${esc(n?n.description:'')}</textarea></div>
+    <div class="grid g3"><div class="field"><label>Disposition</label><select id="nc_disp">${dispOpts}</select></div><div class="field"><label>Severity</label><select id="nc_sev">${sevOpts}</select></div>${n?`<div class="field"><label>Status</label><select id="nc_st">${stOpts}</select></div>`:''}</div>
+    <div class="row-actions"><button class="btn gold" onclick="saveNcr(${n?`'${jsq(n.id)}'`:'null'})">Save</button>${n&&!n.capaId?`<button class="btn ghost" onclick="promoteNcr('${jsq(n.id)}')">Raise CAPA</button>`:''}<button class="btn ghost" onclick="closeModal()">Cancel</button></div></div></div>`;
+}
+async function saveNcr(id){ const body={ jobNo:val("nc_job").trim(), date:val("nc_date"), description:val("nc_desc").trim(), disposition:val("nc_disp"), severity:val("nc_sev") };
+  if(!body.description){ toast("A description is required"); return; }
+  const st=document.getElementById("nc_st"); if(st) body.status=st.value;
+  try{ if(id) await api("/api/ncrs/"+encodeURIComponent(id),{method:"PUT",body}); else await api("/api/ncrs",{method:"POST",body}); closeModal(); toast("NCR saved"); ncrPage(); }catch(e){ toast(e.message); }
+}
+async function promoteNcr(id){ if(!confirm("Create a CAPA linked to this NCR?")) return; try{ const r=await api("/api/ncrs/"+encodeURIComponent(id)+"/capa",{method:"POST"}); closeModal(); toast("Created "+r.capa.id); go("capa"); }catch(e){ toast(e.message); } }
 
 /* equipment & calibration register */
 function equipStatusPill(s){ const m={'OK':'green','Due soon':'amber','Overdue':'red','Retired':'grey','Unscheduled':'grey'}; return `<span class="pill ${m[s]||'grey'}">${esc(s)}</span>`; }
@@ -717,10 +762,10 @@ async function team(){
   const canManage=["Quality Manager","Administrator"].includes(ME.role);
   let users=[]; try{ users=await api("/api/admin/users"); }catch(e){ users=[]; }
   window._users=users;
-  const rows=users.map(u=>`<tr><td><b>${esc(u.id)}</b></td><td>${esc(u.name)}</td><td>${esc(u.role)}</td>${canManage?`<td class="no-print"><button class="btn ghost sm" onclick="userModal('${jsq(u.id)}')">Edit</button> <button class="btn danger sm" onclick="delUser('${jsq(u.id)}')">Remove</button></td>`:''}</tr>`).join("");
-  app().innerHTML=`<div class="card"><h2>Team &amp; Access</h2><p class="sub">People who can sign in, and their roles.</p>
+  const rows=users.map(u=>`<tr><td><b>${esc(u.id)}</b></td><td>${esc(u.name)}</td><td>${esc(u.role)}</td><td>${(u.qualifiedStages&&u.qualifiedStages.length)?esc(u.qualifiedStages.slice().sort().join(', ')):'—'}</td>${canManage?`<td class="no-print"><button class="btn ghost sm" onclick="userModal('${jsq(u.id)}')">Edit</button> <button class="btn danger sm" onclick="delUser('${jsq(u.id)}')">Remove</button></td>`:''}</tr>`).join("");
+  app().innerHTML=`<div class="card"><h2>Team &amp; Access</h2><p class="sub">People who can sign in, their roles, and which stages they're qualified to sign off.</p>
     <h3>Users ${canManage?`<button class="btn gold sm no-print" style="margin-left:8px" onclick="userModal()">+ Add user</button>`:''}</h3>
-    <div style="overflow-x:auto"><table><thead><tr><th>Username</th><th>Name</th><th>Role</th>${canManage?'<th class="no-print"></th>':''}</tr></thead><tbody>${rows||`<tr><td colspan="4" style="color:var(--muted)">No users.</td></tr>`}</tbody></table></div>
+    <div style="overflow-x:auto"><table><thead><tr><th>Username</th><th>Name</th><th>Role</th><th>Qualified stages</th>${canManage?'<th class="no-print"></th>':''}</tr></thead><tbody>${rows||`<tr><td colspan="5" style="color:var(--muted)">No users.</td></tr>`}</tbody></table></div>
     ${canManage?'<p class="sub" style="margin-top:10px">Roles: QA Officer · Supervisor · Quality Manager · Administrator. Supervisors and above can edit jobs &amp; settings; Quality Manager/Administrator manage users.</p>':'<p class="sub" style="margin-top:8px">Only a Quality Manager or Administrator can add or edit users.</p>'}</div>`;
 }
 /* audit trail */
@@ -747,6 +792,9 @@ async function settings(){
   app().innerHTML=`<div class="card"><h2>Settings</h2><p class="sub">Tolerances, master data, integrations and storage.</p>
     <h3>Tolerances (auto pass/fail)</h3><div class="grid g4">${fT("t_cofMin","COF min",md.tolerances.cofMin)}${fT("t_cofMax","COF max",md.tolerances.cofMax)}${fT("t_reg","Registration max (mm)",md.tolerances.registrationMaxMm)}${fT("t_bc","Barcode min grade",md.tolerances.barcodeMinGrade)}</div><div class="row-actions"><button class="btn gold sm" onclick="saveTol()">Save tolerances</button></div>
     <h3>KPI targets (Executive dashboard)</h3><div class="grid g4">${fT("tg_fpy","First-pass yield min (%)",(md.targets||{}).fpyMin)}${fT("tg_capa","Open CAPAs max",(md.targets||{}).openCapasMax)}${fT("tg_cal","Overdue calibrations max",(md.targets||{}).overdueCalMax)}${fT("tg_hold","Hold/Reject jobs max",(md.targets||{}).holdRejectMax)}</div><div class="row-actions"><button class="btn gold sm" onclick="saveTargets()">Save targets</button></div>
+    <h3>Competency control</h3>
+    <label style="text-transform:none;font-weight:600;display:flex;align-items:center;gap:10px;max-width:760px"><input type="checkbox" id="cmp_enf" ${md.competencyEnforced?'checked':''} style="width:auto;min-height:0">Enforce operator competency — block a stage sign-off unless the signer is qualified for that stage (set per user in Team &amp; Access; Administrators bypass).</label>
+    <div class="row-actions"><button class="btn gold sm" onclick="saveCompetency()">Save</button></div>
     <h3>Defect types</h3><textarea id="a_def" style="min-height:80px">${esc((md.defectTypes||[]).join(", "))}</textarea><div class="row-actions"><button class="btn ghost sm" onclick="saveDefects()">Save defect list</button></div>
     <h3>Business Central test</h3><div style="display:flex;gap:8px;max-width:520px"><input id="bcNo" placeholder="Job #"><button class="btn ghost sm" onclick="bcTest()">Lookup</button></div><pre id="bcOut" style="white-space:pre-wrap;background:#f4f7fb;padding:10px;border-radius:8px;font-size:12px"></pre>
     <h3>Backups &amp; storage</h3><div class="kv">
@@ -768,6 +816,8 @@ async function doRestore(){ const name=val("rs_name"); if(!name){ toast("No back
 }
 async function saveTargets(){ const t={ fpyMin:Number(val("tg_fpy"))||0, openCapasMax:Number(val("tg_capa"))||0, overdueCalMax:Number(val("tg_cal"))||0, holdRejectMax:Number(val("tg_hold"))||0 };
   MD.targets=t; try{ await api("/api/masterdata",{method:"PUT",body:{targets:t}}); toast("KPI targets saved"); }catch(e){ toast(e.message); } }
+async function saveCompetency(){ const on=!!(document.getElementById("cmp_enf")&&document.getElementById("cmp_enf").checked); MD.competencyEnforced=on;
+  try{ await api("/api/masterdata",{method:"PUT",body:{competencyEnforced:on}}); toast("Competency enforcement "+(on?"enabled":"disabled")); }catch(e){ toast(e.message); } }
 /* my account */
 function myAccount(){
   app().innerHTML=`<div class="card"><h2>My Account</h2><p class="sub">Your profile and password.</p>
@@ -793,14 +843,16 @@ function userModal(id){ const u=id?(window._users||[]).find(x=>x.id===id):null;
     <div class="field"><label>User ID <span class="req">*</span></label><input id="u_id" value="${u?esc(u.id):''}" ${u?'disabled':''} placeholder="e.g. jsmith"></div>
     <div class="field"><label>Name <span class="req">*</span></label><input id="u_name" value="${u?esc(u.name):''}"></div>
     <div class="field"><label>Role <span class="req">*</span></label><select id="u_role">${ROLES.map(r=>`<option ${u&&u.role===r?'selected':''}>${esc(r)}</option>`).join("")}</select></div>
+    <div class="field"><label>Qualified to sign off stages</label><div style="display:flex;gap:14px;flex-wrap:wrap">${[1,2,3,4].map(s=>`<label style="text-transform:none;font-weight:600"><input type="checkbox" class="u_qs" value="${s}" ${u&&(u.qualifiedStages||[]).map(Number).includes(s)?'checked':''} style="width:auto;min-height:0;margin-right:6px">Stage ${s}</label>`).join("")}</div><p class="sub" style="margin-top:6px">Enforced only when competency checks are on (Settings); Administrators always bypass.</p></div>
     <div class="field"><label>Password${u?' (leave blank to keep current)':' <span class="req">*</span>'}</label><input id="u_pass" type="password" autocomplete="new-password" placeholder="${u?'••••••':'min 6 characters'}"></div>
     <div class="row-actions"><button class="btn gold" onclick="saveUser(${u?`'${jsq(u.id)}'`:'null'})">Save</button><button class="btn ghost" onclick="closeModal()">Cancel</button></div></div></div>`;
 }
 async function saveUser(id){ const name=val("u_name").trim(), role=val("u_role"), password=val("u_pass");
   if(!name){ toast("Name is required"); return; }
+  const qualifiedStages=[...document.querySelectorAll('.u_qs:checked')].map(c=>Number(c.value));
   try{
-    if(id){ const body={name,role}; if(password){ if(password.length<6){ toast("Password must be at least 6 characters"); return; } body.password=password; } await api("/api/admin/users/"+encodeURIComponent(id),{method:"PUT",body}); }
-    else { const uid=val("u_id").trim(); if(!uid){ toast("User ID is required"); return; } if(password.length<6){ toast("Password must be at least 6 characters"); return; } await api("/api/admin/users",{method:"POST",body:{id:uid,name,role,password}}); }
+    if(id){ const body={name,role,qualifiedStages}; if(password){ if(password.length<6){ toast("Password must be at least 6 characters"); return; } body.password=password; } await api("/api/admin/users/"+encodeURIComponent(id),{method:"PUT",body}); }
+    else { const uid=val("u_id").trim(); if(!uid){ toast("User ID is required"); return; } if(password.length<6){ toast("Password must be at least 6 characters"); return; } await api("/api/admin/users",{method:"POST",body:{id:uid,name,role,password,qualifiedStages}}); }
     closeModal(); toast("User saved"); team();
   }catch(e){ toast(e.message); }
 }
