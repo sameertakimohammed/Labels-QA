@@ -24,6 +24,26 @@ nav.tabs{display:flex;gap:4px;background:var(--navy2);padding:0 12px;overflow-x:
 nav.tabs button{flex:0 0 auto;background:transparent;border:0;color:#cdd9e8;padding:13px 18px;font-size:15px;font-weight:700;cursor:pointer;border-bottom:3px solid transparent}
 nav.tabs button.active{color:#fff;border-bottom-color:var(--gold)}
 main{max-width:1100px;margin:0 auto;padding:20px}
+/* topbar + sidebar layout */
+header.topbar{position:sticky;top:0;z-index:30;display:flex;align-items:center;gap:12px;padding:10px 16px;background:linear-gradient(120deg,var(--navy),var(--navy2));color:#fff}
+.hamburger{display:none;background:transparent;border:0;color:#fff;font-size:24px;line-height:1;cursor:pointer;padding:4px 10px;border-radius:8px}
+.hamburger:active{background:rgba(255,255,255,.12)}
+.layout{display:flex;align-items:flex-start}
+.sidebar{flex:0 0 232px;width:232px;background:var(--navy);color:#cdd9e8;padding:10px 10px 24px;position:sticky;top:64px;height:calc(100vh - 64px);overflow-y:auto}
+.layout>main{flex:1 1 auto;min-width:0}
+.nav-group-label{font-size:11px;letter-spacing:.6px;text-transform:uppercase;color:#7e93ad;font-weight:800;padding:16px 12px 6px}
+.nav-item{display:flex;align-items:center;gap:12px;width:100%;background:transparent;border:0;color:#cdd9e8;padding:12px;border-radius:10px;font-size:15px;font-weight:700;cursor:pointer;text-align:left;margin:2px 0}
+.nav-item:hover{background:rgba(255,255,255,.07);color:#fff}
+.nav-item.active{background:var(--gold);color:var(--navy)}
+.nav-ic{flex:0 0 auto;opacity:.9}
+.scrim{display:none}
+@media(max-width:900px){
+  .hamburger{display:block}
+  .layout{display:block}
+  .sidebar{position:fixed;top:0;left:0;height:100vh;z-index:50;transform:translateX(-100%);transition:transform .25s ease;flex:none;width:268px;padding-top:16px;box-shadow:0 0 40px rgba(0,0,0,.4)}
+  .sidebar.open{transform:translateX(0)}
+  .scrim.show{display:block;position:fixed;inset:0;background:rgba(8,20,35,.5);z-index:40}
+}
 /* generic */
 .card{background:var(--card);border:1px solid var(--line);border-radius:var(--r);box-shadow:var(--shadow);padding:22px;margin-bottom:18px}
 .card h2{margin:0 0 4px;font-size:21px}.card .sub{color:var(--muted);font-size:14px;margin:0 0 16px}
@@ -90,7 +110,7 @@ canvas.sig{border:2px dashed var(--line);border-radius:12px;width:100%;height:17
 .countdown{font-weight:800}
 @media print{
   body{background:#fff;font-size:12px}
-  header.app,nav.tabs,.row-actions,.no-print,.toast,#login{display:none!important}
+  header.app,nav.tabs,header.topbar,.sidebar,.scrim,.row-actions,.no-print,.toast,#login{display:none!important}
   main{max-width:100%;padding:0;margin:0}
   .card{box-shadow:none;border:none;padding:0;margin:0}
   .summary-stage{border:1px solid #999;break-inside:avoid;page-break-inside:avoid;margin-bottom:10px}

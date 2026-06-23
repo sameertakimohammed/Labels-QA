@@ -248,6 +248,16 @@ async function main() {
       officerToken);
     eq('non-manager POST /api/admin/users -> 403', r.status, 403);
 
+    // 14. self-service password change (My Account)
+    r = await request('POST', '/api/me/password', { current: 'wrongpw', new: 'newpass123' }, adminToken);
+    eq('change password with wrong current -> 401', r.status, 401);
+    r = await request('POST', '/api/me/password', { current: 'admin123', new: 'x' }, adminToken);
+    eq('change password too short -> 400', r.status, 400);
+    r = await request('POST', '/api/me/password', { current: 'admin123', new: 'newpass123' }, adminToken);
+    eq('change password -> 200', r.status, 200);
+    r = await request('POST', '/api/login', { username: 'admin', password: 'newpass123' });
+    eq('login with new password -> 200', r.status, 200);
+
   } catch (e) {
     failed++;
     console.log('FAIL  unexpected error during run -> ' + (e && e.stack ? e.stack : e));

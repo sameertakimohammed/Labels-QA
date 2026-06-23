@@ -31,25 +31,20 @@
 
   <!-- App -->
   <div id="appwrap" class="hidden">
-    <header class="app">
-      <div class="bar">
-        <div class="brand"><div class="mark">G</div><div><h1>Golden QA</h1><p>Starkist Label Inspection</p></div></div>
-        <div class="right">
-          <span class="netdot" id="netdot" title="online"></span>
-          <span class="who"><b id="whoName">-</b><span id="whoRole">-</span></span>
-          <button class="btn ghost sm" id="logoutBtn">Logout</button>
-        </div>
+    <header class="topbar">
+      <button class="hamburger no-print" id="navToggle" aria-label="Menu">☰</button>
+      <div class="brand"><div class="mark">G</div><div><h1>Golden QA</h1><p>Starkist Label Inspection</p></div></div>
+      <div class="right">
+        <span class="netdot" id="netdot" title="online"></span>
+        <span class="who"><b id="whoName">-</b><span id="whoRole">-</span></span>
+        <button class="btn ghost sm" id="logoutBtn">Logout</button>
       </div>
-      <nav class="tabs" id="tabs">
-        <button data-view="dashboard" class="active">Dashboard</button>
-        <button data-view="new">+ New Job</button>
-        <button data-view="entry">Data Entry</button>
-        <button data-view="lookup">Job Lookup</button>
-        <button data-view="analytics">Analytics</button>
-        <button data-view="admin">Admin</button>
-      </nav>
     </header>
-    <main id="app"></main>
+    <div class="layout">
+      <aside class="sidebar" id="sidebar"></aside>
+      <div class="scrim no-print" id="scrim"></div>
+      <main id="app"></main>
+    </div>
   </div>
 
   <div id="modalRoot"></div>

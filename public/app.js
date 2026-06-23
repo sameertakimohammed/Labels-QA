@@ -4,6 +4,33 @@
 const QC_PARAMS = ["Banded Bundle Checked","Shrink-Wrapped Bundle Checked","Packing Label Checked","Finished Good Pallet Checked","Label Orientation in Bundle","Line Clearance Status","Curling","Printing Defects","Cutting Defects"];
 const YN = ["","Yes","No","N/A"];
 const ROLES = ["QA Officer","Supervisor","Quality Manager","Administrator"];
+const NAV = [
+  { group:"", items:[
+    {v:"dashboard",label:"Dashboard",icon:"dashboard"},
+    {v:"new",label:"New Job",icon:"plus"},
+    {v:"entry",label:"Data Entry",icon:"edit"},
+    {v:"lookup",label:"Job Lookup",icon:"search"}
+  ]},
+  { group:"Reports", items:[ {v:"reports",label:"Reports",icon:"chart"} ]},
+  { group:"Settings", items:[
+    {v:"team",label:"Team & Access",icon:"users",mgr:true},
+    {v:"audit",label:"Audit Trail",icon:"audit",mgr:true},
+    {v:"settings",label:"Settings",icon:"gear",mgr:true},
+    {v:"account",label:"My Account",icon:"user"}
+  ]}
+];
+const ICONS = {
+  dashboard:"M3 3h7v7H3zM14 3h7v7h-7zM14 14h7v7h-7zM3 14h7v7H3z",
+  plus:"M12 5v14M5 12h14",
+  edit:"M12 20h9M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4z",
+  search:"M11 19a8 8 0 1 1 0-16 8 8 0 0 1 0 16zM21 21l-4.35-4.35",
+  chart:"M4 20V10M10 20V4M16 20v-7M3 20h18",
+  users:"M17 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2M9.5 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75",
+  audit:"M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8zM14 2v6h6M9 13h6M9 17h6",
+  gear:"M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z",
+  user:"M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2M12 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8"
+};
+function ic(n){ return `<svg class="nav-ic" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="${ICONS[n]||''}"/></svg>`; }
 const STAGES = [
   {key:"stage1",no:1,name:"Printing",form:"F-040-A / F-016-E / F-027-A"},
   {key:"stage2",no:2,name:"Reel Inspection",form:"F-021"},
@@ -110,15 +137,27 @@ function logout(){ TOKEN=null; localStorage.removeItem("gqa_token"); ME=null; sh
 function showApp(){
   $("#login").classList.add("hidden"); $("#appwrap").classList.remove("hidden");
   $("#whoName").textContent=ME.name; $("#whoRole").textContent=ME.role;
-  const isMgr=["Supervisor","Quality Manager","Administrator"].includes(ME.role);
-  document.querySelectorAll('#tabs button').forEach(b=>{ if(b.dataset.view==="admin") b.style.display=isMgr?"":"none"; });
+  buildSidebar();
   $("#logoutBtn").onclick=logout;
-  $("#tabs").onclick=(e)=>{ const b=e.target.closest("button[data-view]"); if(b) go(b.dataset.view); };
+  $("#sidebar").onclick=(e)=>{ const b=e.target.closest("button[data-view]"); if(b) go(b.dataset.view); };
+  $("#navToggle").onclick=()=>{ $("#sidebar").classList.toggle("open"); $("#scrim").classList.toggle("show"); };
+  $("#scrim").onclick=closeNav;
   go("dashboard");
 }
+function buildSidebar(){
+  const isMgr=["Supervisor","Quality Manager","Administrator"].includes(ME.role);
+  $("#sidebar").innerHTML=NAV.map(g=>{
+    const items=g.items.filter(it=>!it.mgr||isMgr).map(it=>`<button class="nav-item" data-view="${it.v}">${ic(it.icon)}<span>${esc(it.label)}</span></button>`).join("");
+    return items ? (g.group?`<div class="nav-group-label">${esc(g.group)}</div>`:"")+items : "";
+  }).join("");
+}
+function closeNav(){ const s=$("#sidebar"); if(s)s.classList.remove("open"); const c=$("#scrim"); if(c)c.classList.remove("show"); }
 function go(view,opts={}){ CUR.view=view; if(opts.jobNo!==undefined)CUR.jobNo=opts.jobNo; if(opts.stage)CUR.stage=opts.stage;
-  document.querySelectorAll('#tabs button').forEach(b=>b.classList.toggle("active",b.dataset.view===view)); render(); }
-function render(){ const v=CUR.view; if(v==="dashboard")dashboard(); else if(v==="new")newJob(); else if(v==="entry")entry(); else if(v==="lookup")lookup(); else if(v==="analytics")analyticsView(); else if(v==="admin")admin(); }
+  document.querySelectorAll('#sidebar button[data-view]').forEach(b=>b.classList.toggle("active",b.dataset.view===view)); closeNav(); render(); }
+function render(){ const v=CUR.view;
+  if(v==="dashboard")dashboard(); else if(v==="new")newJob(); else if(v==="entry")entry(); else if(v==="lookup")lookup();
+  else if(v==="reports")reports(); else if(v==="team")team(); else if(v==="audit")auditTrail(); else if(v==="settings")settings(); else if(v==="account")myAccount();
+  else dashboard(); }
 
 /* ---------- dashboard ---------- */
 async function dashboard(){
@@ -396,10 +435,11 @@ async function doLook(){ const no=$("#lk").value.trim(); const host=$("#lkr"); i
 }
 function photosView(s){ return (s.photos&&s.photos.length)?`<h4>Photos</h4><div class="thumbs">${s.photos.map(u=>`<img src="${esc(u)}">`).join("")}</div>`:""; }
 
-/* analytics */
-async function analyticsView(){
-  app().innerHTML=`<div class="card"><h2>Quality Analytics</h2><p class="sub">Live from recorded inspection data.</p>
-    ${["Supervisor","Quality Manager","Administrator"].includes(ME.role)?`<div class="row-actions no-print"><button class="btn ghost" onclick="sendDigest()">✉ Email digest to managers</button><button class="btn ghost" onclick="exportCsv()">⤓ Export CSV</button></div>`:''}
+/* reports */
+async function reports(){
+  const isMgr=["Supervisor","Quality Manager","Administrator"].includes(ME.role);
+  app().innerHTML=`<div class="card"><h2>Reports</h2><p class="sub">Live quality analytics from recorded inspection data.</p>
+    <div class="row-actions no-print"><button class="btn ghost" onclick="exportCsv()">⤓ Export CSV</button>${isMgr?`<button class="btn ghost" onclick="sendDigest()">✉ Email digest to managers</button>`:''}</div>
     <div class="stats" id="kpis"></div>
     <div class="grid g2"><div><h3>Defects by type (Kg)</h3><canvas id="cDef" height="220"></canvas></div><div><h3>Waste by machine (Kg)</h3><canvas id="cWaste" height="220"></canvas></div></div>
     <div class="grid g2"><div><h3>Down-time analysis (hrs)</h3><canvas id="cDt" height="220"></canvas></div><div><h3>First-pass yield</h3><canvas id="cFpy" height="220"></canvas></div></div></div>`;
@@ -418,16 +458,29 @@ async function analyticsView(){
 
 async function sendDigest(){ try{ const r=await api("/api/digest/send",{method:"POST"}); if(r.ok) toast("Digest emailed to managers"); else toast("Digest "+(r.teams?"sent to Teams":"not sent")+(r.error&&r.error!=="email disabled"?" — "+r.error:" (configure SMTP/Teams in Admin)")); }catch(e){ toast(e.message); } }
 
-/* admin */
-async function admin(){
-  const md=MD; let audit=[]; try{ audit=await api("/api/audit"); }catch(e){}
+/* team & access */
+async function team(){
   const canManage=["Quality Manager","Administrator"].includes(ME.role);
-  let users=[]; try{ users = await api("/api/admin/users"); }catch(e){ users=[]; }
+  let users=[]; try{ users=await api("/api/admin/users"); }catch(e){ users=[]; }
   window._users=users;
+  const rows=users.map(u=>`<tr><td><b>${esc(u.id)}</b></td><td>${esc(u.name)}</td><td>${esc(u.role)}</td>${canManage?`<td class="no-print"><button class="btn ghost sm" onclick="userModal('${jsq(u.id)}')">Edit</button> <button class="btn danger sm" onclick="delUser('${jsq(u.id)}')">Remove</button></td>`:''}</tr>`).join("");
+  app().innerHTML=`<div class="card"><h2>Team &amp; Access</h2><p class="sub">People who can sign in, and their roles.</p>
+    <h3>Users ${canManage?`<button class="btn gold sm no-print" style="margin-left:8px" onclick="userModal()">+ Add user</button>`:''}</h3>
+    <div style="overflow-x:auto"><table><thead><tr><th>Username</th><th>Name</th><th>Role</th>${canManage?'<th class="no-print"></th>':''}</tr></thead><tbody>${rows||`<tr><td colspan="4" style="color:var(--muted)">No users.</td></tr>`}</tbody></table></div>
+    ${canManage?'<p class="sub" style="margin-top:10px">Roles: QA Officer · Supervisor · Quality Manager · Administrator. Supervisors and above can edit jobs &amp; settings; Quality Manager/Administrator manage users.</p>':'<p class="sub" style="margin-top:8px">Only a Quality Manager or Administrator can add or edit users.</p>'}</div>`;
+}
+/* audit trail */
+async function auditTrail(){
+  let audit=[]; try{ audit=await api("/api/audit"); }catch(e){}
+  app().innerHTML=`<div class="card"><h2>Audit Trail</h2><p class="sub">Immutable log of the latest 300 actions.</p>
+    <div style="overflow-x:auto;max-height:72vh;overflow-y:auto"><table><thead><tr><th>Time</th><th>User</th><th>Action</th><th>Job</th><th>Detail</th></tr></thead><tbody>${audit.length?audit.map(x=>`<tr><td>${esc(x.ts.replace('T',' ').slice(0,19))}</td><td>${esc(x.user)}</td><td>${esc(x.action)}</td><td>${esc(x.jobNo)}</td><td>${esc(x.detail)}</td></tr>`).join(""):`<tr><td colspan="5" style="color:var(--muted)">No audit entries yet.</td></tr>`}</tbody></table></div></div>`;
+}
+/* settings (master data, integrations, storage) */
+async function settings(){
+  const md=MD;
   let backups=null; try{ backups=await api("/api/admin/backups"); }catch(e){}
   let health=null; try{ health=await (await fetch("/api/health")).json(); }catch(e){}
-  const userRows=users.map(u=>`<tr><td><b>${esc(u.id)}</b></td><td>${esc(u.name)}</td><td>${esc(u.role)}</td>${canManage?`<td class="no-print"><button class="btn ghost sm" onclick="userModal('${jsq(u.id)}')">Edit</button> <button class="btn danger sm" onclick="delUser('${jsq(u.id)}')">Remove</button></td>`:''}</tr>`).join("");
-  app().innerHTML=`<div class="card"><h2>Admin</h2><p class="sub">Master data, users, integrations and audit trail. Role: ${esc(ME.role)}</p>
+  app().innerHTML=`<div class="card"><h2>Settings</h2><p class="sub">Tolerances, master data, integrations and storage.</p>
     <h3>Tolerances (auto pass/fail)</h3><div class="grid g4">${fT("t_cofMin","COF min",md.tolerances.cofMin)}${fT("t_cofMax","COF max",md.tolerances.cofMax)}${fT("t_reg","Registration max (mm)",md.tolerances.registrationMaxMm)}${fT("t_bc","Barcode min grade",md.tolerances.barcodeMinGrade)}</div><div class="row-actions"><button class="btn gold sm" onclick="saveTol()">Save tolerances</button></div>
     <h3>Defect types</h3><textarea id="a_def" style="min-height:80px">${esc((md.defectTypes||[]).join(", "))}</textarea><div class="row-actions"><button class="btn ghost sm" onclick="saveDefects()">Save defect list</button></div>
     <h3>Business Central test</h3><div style="display:flex;gap:8px;max-width:520px"><input id="bcNo" placeholder="Job #"><button class="btn ghost sm" onclick="bcTest()">Lookup</button></div><pre id="bcOut" style="white-space:pre-wrap;background:#f4f7fb;padding:10px;border-radius:8px;font-size:12px"></pre>
@@ -438,11 +491,27 @@ async function admin(){
       <div><span>Backup size</span><b>${backups&&backups.latest?esc(backups.latest.sizeKB+' KB'):'—'}</b></div>
       <div><span>Total dumps</span><b>${backups?esc(backups.count):'—'}</b></div>
       <div><span>Backups dir</span><b style="font-size:12px">${esc(backups?backups.dir:'?')}</b></div>
+    </div></div>`;
+}
+/* my account */
+function myAccount(){
+  app().innerHTML=`<div class="card"><h2>My Account</h2><p class="sub">Your profile and password.</p>
+    <div class="kv"><div><span>Name</span><b>${esc(ME.name)}</b></div><div><span>Username</span><b>${esc(ME.id)}</b></div><div><span>Role</span><b>${esc(ME.role)}</b></div></div>
+    <h3>Change password</h3>
+    <div class="grid g3" style="max-width:760px">
+      <div class="field"><label>Current password</label><input id="pw_cur" type="password" autocomplete="current-password"></div>
+      <div class="field"><label>New password</label><input id="pw_new" type="password" autocomplete="new-password" placeholder="min 6 characters"></div>
+      <div class="field"><label>Confirm new password</label><input id="pw_cf" type="password" autocomplete="new-password"></div>
     </div>
-    <h3>Users ${canManage?`<button class="btn gold sm no-print" style="margin-left:8px" onclick="userModal()">+ Add user</button>`:''}</h3>
-    <div style="overflow-x:auto"><table><thead><tr><th>ID</th><th>Name</th><th>Role</th>${canManage?'<th class="no-print"></th>':''}</tr></thead><tbody>${userRows||`<tr><td colspan="4" style="color:var(--muted)">No users.</td></tr>`}</tbody></table></div>
-    ${canManage?'':'<p class="sub" style="margin-top:8px">Only a Quality Manager or Administrator can add or edit users.</p>'}
-    <h3>Audit trail (latest 300)</h3><div style="overflow-x:auto;max-height:320px;overflow-y:auto"><table><thead><tr><th>Time</th><th>User</th><th>Action</th><th>Job</th><th>Detail</th></tr></thead><tbody>${audit.map(x=>`<tr><td>${esc(x.ts.replace('T',' ').slice(0,19))}</td><td>${esc(x.user)}</td><td>${esc(x.action)}</td><td>${esc(x.jobNo)}</td><td>${esc(x.detail)}</td></tr>`).join("")}</tbody></table></div></div>`;
+    <div class="row-actions"><button class="btn gold" onclick="changePassword()">Update password</button></div>
+    <p class="sub" style="margin-top:8px">Signed in with Microsoft 365? Manage your password in your Microsoft account instead.</p>
+    <div class="row-actions" style="margin-top:18px;border-top:1px solid var(--line);padding-top:16px"><button class="btn ghost" onclick="logout()">Sign out</button></div></div>`;
+}
+async function changePassword(){ const cur=val("pw_cur"), nw=val("pw_new"), cf=val("pw_cf");
+  if(!cur||!nw){ toast("Enter your current and new password"); return; }
+  if(nw.length<6){ toast("New password must be at least 6 characters"); return; }
+  if(nw!==cf){ toast("New passwords don't match"); return; }
+  try{ await api("/api/me/password",{method:"POST",body:{current:cur,new:nw}}); toast("Password updated"); ["pw_cur","pw_new","pw_cf"].forEach(id=>{ const e=document.getElementById(id); if(e)e.value=""; }); }catch(e){ toast(e.message); }
 }
 function userModal(id){ const u=id?(window._users||[]).find(x=>x.id===id):null;
   $("#modalRoot").innerHTML=`<div class="modal-bg"><div class="modal"><h2>${u?'Edit user':'Add user'}</h2>
@@ -457,10 +526,10 @@ async function saveUser(id){ const name=val("u_name").trim(), role=val("u_role")
   try{
     if(id){ const body={name,role}; if(password){ if(password.length<6){ toast("Password must be at least 6 characters"); return; } body.password=password; } await api("/api/admin/users/"+encodeURIComponent(id),{method:"PUT",body}); }
     else { const uid=val("u_id").trim(); if(!uid){ toast("User ID is required"); return; } if(password.length<6){ toast("Password must be at least 6 characters"); return; } await api("/api/admin/users",{method:"POST",body:{id:uid,name,role,password}}); }
-    closeModal(); toast("User saved"); admin();
+    closeModal(); toast("User saved"); team();
   }catch(e){ toast(e.message); }
 }
-async function delUser(id){ if(!confirm("Remove user '"+id+"'? This cannot be undone.")) return; try{ await api("/api/admin/users/"+encodeURIComponent(id),{method:"DELETE"}); toast("User removed"); admin(); }catch(e){ toast(e.message); } }
+async function delUser(id){ if(!confirm("Remove user '"+id+"'? This cannot be undone.")) return; try{ await api("/api/admin/users/"+encodeURIComponent(id),{method:"DELETE"}); toast("User removed"); team(); }catch(e){ toast(e.message); } }
 async function saveTol(){ MD.tolerances=Object.assign(MD.tolerances,{cofMin:parseFloat(val("t_cofMin")),cofMax:parseFloat(val("t_cofMax")),registrationMaxMm:parseFloat(val("t_reg")),barcodeMinGrade:val("t_bc")}); await api("/api/masterdata",{method:"PUT",body:{tolerances:MD.tolerances}}); toast("Tolerances saved"); }
 async function saveDefects(){ MD.defectTypes=val("a_def").split(",").map(s=>s.trim()).filter(Boolean); await api("/api/masterdata",{method:"PUT",body:{defectTypes:MD.defectTypes}}); toast("Defect list saved"); }
 async function bcTest(){ const no=$("#bcNo").value.trim(); const out=$("#bcOut"); out.textContent="Looking up…"; try{ const r=await api("/api/bc/job/"+encodeURIComponent(no)); out.textContent=JSON.stringify(r,null,2); }catch(e){ out.textContent=e.message; } }

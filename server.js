@@ -172,6 +172,15 @@ async function api(req, res, url) {
   const user = userByToken(req);
   if (!user) return send(res,401,{error:'Not authenticated'});
 
+  if (seg[0]==='me' && seg[1]==='password' && method==='POST') {
+    const dbu = DB.users.find(u=>u.id===user.id);
+    if(!dbu) return send(res,400,{error:'This account signs in via Microsoft 365 — manage its password in Microsoft.'});
+    const b = await readBody(req);
+    if(!checkPw(dbu, String(b.current||''))) return send(res,401,{error:'Current password is incorrect'});
+    if(String(b.new||'').length<6) return send(res,400,{error:'New password must be at least 6 characters'});
+    dbu.salt=crypto.randomBytes(16).toString('hex'); dbu.passHash=hashPw(String(b.new),dbu.salt); audit(user,'change-password'); saveDB();
+    return send(res,200,{ ok:true });
+  }
   if (seg[0]==='me') return send(res,200,{ user:pubUser(user) });
 
   if (seg[0]==='jobs' && method==='GET' && !seg[1]) {
