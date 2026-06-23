@@ -307,6 +307,35 @@ async function main() {
     r = await request('POST', '/api/login', { username: LOCKUSER, password: 'bad' });
     eq('6th attempt locked out -> 429', r.status, 429);
 
+    // 20. equipment & calibration register
+    r = await request('GET', '/api/equipment', undefined, adminToken);
+    eq('GET /api/equipment -> 200', r.status, 200);
+    ok('equipment list computes calStatus', Array.isArray(r.body) && r.body.every((e) => typeof e.calStatus === 'string'), JSON.stringify(r.body && r.body.length));
+
+    r = await request('POST', '/api/equipment', { name: 'Smoke Gauge ' + PID, type: 'Gauge', calibratedOn: '2020-01-01', calibrationIntervalDays: 30 }, adminToken);
+    eq('POST /api/equipment -> 200', r.status, 200);
+    const eqId = r.body && r.body.id;
+    ok('new equipment with old cal date is Overdue', !!(eqId && r.body.calStatus === 'Overdue'), JSON.stringify(r.body && { s: r.body.calStatus, due: r.body.nextDue }));
+
+    r = await request('POST', '/api/equipment', { type: 'Gauge' }, adminToken);
+    eq('POST /api/equipment without name -> 400', r.status, 400);
+
+    r = await request('POST', '/api/equipment/' + encodeURIComponent(eqId) + '/calibrate', { result: 'Pass', intervalDays: 365 }, adminToken);
+    eq('POST /api/equipment/:id/calibrate -> 200', r.status, 200);
+    ok('status is OK after a fresh calibration', !!(r.body && r.body.calStatus === 'OK'), JSON.stringify(r.body && r.body.calStatus));
+
+    r = await request('POST', '/api/equipment', { name: 'nope' }, officerToken);
+    eq('non-manager POST /api/equipment -> 403', r.status, 403);
+
+    // 21. executive dashboard (RAG vs targets)
+    r = await request('GET', '/api/exec', undefined, adminToken);
+    eq('GET /api/exec -> 200', r.status, 200);
+    ok('exec returns kpis[] scored R/A/G + lists',
+      !!(r.body && Array.isArray(r.body.kpis) && r.body.kpis.length >= 4 && r.body.kpis.every((k) => ['green', 'amber', 'red'].includes(k.rag)) && r.body.lists),
+      JSON.stringify(r.body && r.body.kpis && r.body.kpis.map((k) => k.key + ':' + k.rag)));
+    r = await request('GET', '/api/exec', undefined, officerToken);
+    eq('non-manager GET /api/exec -> 403', r.status, 403);
+
   } catch (e) {
     failed++;
     console.log('FAIL  unexpected error during run -> ' + (e && e.stack ? e.stack : e));

@@ -5,13 +5,13 @@ const QC_PARAMS = ["Banded Bundle Checked","Shrink-Wrapped Bundle Checked","Pack
 const YN = ["","Yes","No","N/A"];
 const ROLES = ["QA Officer","Supervisor","Quality Manager","Administrator"];
 const NAV = [
-  { group:"Overview", items:[ {v:"dashboard",label:"Dashboard",icon:"dashboard"} ]},
+  { group:"Overview", items:[ {v:"dashboard",label:"Dashboard",icon:"dashboard"}, {v:"exec",label:"Executive",icon:"exec",mgr:true} ]},
   { group:"Inspection", items:[
     {v:"new",label:"New Job",icon:"plus"},
     {v:"entry",label:"Data Entry",icon:"edit"},
     {v:"lookup",label:"Job Lookup",icon:"search"}
   ]},
-  { group:"Quality", items:[ {v:"capa",label:"CAPA",icon:"capa"} ]},
+  { group:"Quality", items:[ {v:"capa",label:"CAPA",icon:"capa"}, {v:"equip",label:"Equipment",icon:"equip"} ]},
   { group:"Reports", items:[ {v:"reports",label:"Reports",icon:"chart"} ]},
   { group:"Settings", items:[
     {v:"team",label:"Team & Access",icon:"users",mgr:true},
@@ -30,7 +30,9 @@ const ICONS = {
   audit:"M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8zM14 2v6h6M9 13h6M9 17h6",
   gear:"M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z",
   user:"M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2M12 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8",
-  capa:"M9 5H7a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2M9 5a2 2 0 0 0 2 2h2a2 2 0 0 0 2-2M9 5a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2m-5 9 2 2 4-4"
+  capa:"M9 5H7a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2M9 5a2 2 0 0 0 2 2h2a2 2 0 0 0 2-2M9 5a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2m-5 9 2 2 4-4",
+  exec:"M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0zM12 12l3.5-2.2",
+  equip:"M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"
 };
 function ic(n){ return `<svg class="nav-ic" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="${ICONS[n]||''}"/></svg>`; }
 const STAGES = [
@@ -164,7 +166,7 @@ function go(view,opts={}){ CUR.view=view; if(opts.jobNo!==undefined)CUR.jobNo=op
   document.querySelectorAll('#sidebar button[data-view]').forEach(b=>b.classList.toggle("active",b.dataset.view===view)); closeNav(); render(); }
 function render(){ const v=CUR.view;
   if(v==="dashboard")dashboard(); else if(v==="new")newJob(); else if(v==="entry")entry(); else if(v==="lookup")lookup();
-  else if(v==="capa")capaPage(); else if(v==="reports")reports(); else if(v==="team")team(); else if(v==="audit")auditTrail(); else if(v==="settings")settings(); else if(v==="account")myAccount();
+  else if(v==="exec")execDashboard(); else if(v==="capa")capaPage(); else if(v==="equip")equipmentPage(); else if(v==="reports")reports(); else if(v==="team")team(); else if(v==="audit")auditTrail(); else if(v==="settings")settings(); else if(v==="account")myAccount();
   else dashboard(); }
 
 /* ---------- dashboard ---------- */
@@ -545,6 +547,95 @@ async function saveCapa(id){
 }
 function raiseCapaFor(no){ const ov=JOB&&JOB.statusOverride; capaModal(null,{ jobNo:no, severity:(ov==='Hold'||ov==='Rejected')?'High':'Medium', source:ov?('Job '+ov):'In-process inspection' }); }
 
+/* equipment & calibration register */
+function equipStatusPill(s){ const m={'OK':'green','Due soon':'amber','Overdue':'red','Retired':'grey','Unscheduled':'grey'}; return `<span class="pill ${m[s]||'grey'}">${esc(s)}</span>`; }
+async function equipmentPage(){
+  const canManage=isMgrRole();
+  app().innerHTML=`<div class="empty">Loading…</div>`;
+  let list=[]; try{ list=await api("/api/equipment"); }catch(e){ app().innerHTML=`<div class="card"><div class="empty">Could not load equipment — ${esc(e.message)}</div></div>`; return; }
+  window._equip=list;
+  const overdue=list.filter(e=>e.calStatus==='Overdue').length, dueSoon=list.filter(e=>e.calStatus==='Due soon').length;
+  app().innerHTML=`<div class="card"><div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+      <div><h2 style="margin:0">Equipment &amp; Calibration</h2><p class="sub" style="margin:4px 0 0">${list.length} items · ${overdue} overdue · ${dueSoon} due soon.</p></div>
+      <div style="margin-left:auto" class="no-print">${canManage?`<button class="btn gold" onclick="equipModal()">+ Add equipment</button>`:''}</div></div>
+    <div class="grid g3 no-print" style="margin:4px 0 14px">
+      <div class="field"><label>Status</label><select id="eq_status" onchange="renderEquipRows()"><option value="">All</option><option>OK</option><option>Due soon</option><option>Overdue</option><option>Retired</option><option>Unscheduled</option></select></div>
+      <div class="field"><label>Search</label><input id="eq_q" placeholder="Name, type, machine, owner" oninput="renderEquipRows()"></div>
+    </div>
+    ${list.length?`<div style="overflow-x:auto"><table><thead><tr><th>ID</th><th>Name</th><th>Type</th><th>Machine</th><th>Last cal.</th><th>Next due</th><th>Status</th>${canManage?'<th class="no-print"></th>':''}</tr></thead><tbody id="eqbody"></tbody></table></div><div class="empty hidden" id="eqempty" style="padding:18px">No equipment matches the filter.</div>`:`<div class="empty">No equipment registered yet.${canManage?' Add gauges, verifiers, anilox rolls and machines to track calibration.':''}</div>`}</div>`;
+  if(list.length) renderEquipRows();
+}
+function renderEquipRows(){
+  const canManage=isMgrRole(); const st=val("eq_status"), q=(val("eq_q")||"").toLowerCase().trim();
+  let list=(window._equip||[]);
+  if(st) list=list.filter(e=>e.calStatus===st);
+  if(q) list=list.filter(e=>((e.id||"")+" "+(e.name||"")+" "+(e.type||"")+" "+(e.machine||"")+" "+(e.owner||"")).toLowerCase().includes(q));
+  const tb=$("#eqbody"); if(!tb)return;
+  tb.innerHTML=list.map(e=>{ const overdue=e.calStatus==='Overdue', soon=e.calStatus==='Due soon';
+    const due=e.nextDue?`${esc(e.nextDue)}${e.daysToDue!=null?` <span style="color:var(--muted);font-size:12px">(${e.daysToDue<0?Math.abs(e.daysToDue)+'d ago':'in '+e.daysToDue+'d'})</span>`:''}`:'—';
+    return `<tr><td><b>${esc(e.id)}</b></td><td>${esc(e.name)}</td><td>${esc(e.type)}</td><td>${e.machine?`<span class="tag-machine">${esc(mlabel(e.machine))}</span>`:'—'}</td><td>${esc(e.calibratedOn||'—')}</td><td class="${overdue?'flag bad':(soon?'flag':'')}">${due}</td><td>${equipStatusPill(e.calStatus)}</td>${canManage?`<td class="no-print"><button class="btn gold sm" onclick="calibrateModal('${jsq(e.id)}')">Calibrate</button> <button class="btn ghost sm" onclick="equipModal('${jsq(e.id)}')">Edit</button></td>`:''}</tr>`;
+  }).join("");
+  const em=$("#eqempty"); if(em)em.classList.toggle("hidden",!!list.length);
+}
+function equipModal(id){
+  const e=id?(window._equip||[]).find(x=>x.id===id):null;
+  const typeOpts=["Machine","Anilox","Gauge","Verifier","Scale","Other"].map(t=>`<option ${e&&e.type===t?'selected':''}>${t}</option>`).join("");
+  const machineOpts=`<option value="">— none —</option>`+Object.keys((MD&&MD.machines)||{}).map(m=>`<option value="${esc(m)}" ${e&&e.machine===m?'selected':''}>${esc(MD.machines[m].label)}</option>`).join("");
+  $("#modalRoot").innerHTML=`<div class="modal-bg"><div class="modal"><h2>${e?esc(e.id):'Add equipment'}</h2>
+    <div class="field"><label>Name <span class="req">*</span></label><input id="eq_name" value="${esc(e?e.name:'')}" placeholder="e.g. GS1 Barcode Verifier"></div>
+    <div class="grid g2">
+      <div class="field"><label>Type</label><select id="eq_type">${typeOpts}</select></div>
+      <div class="field"><label>Asset / serial</label><input id="eq_ident" value="${esc(e?e.identifier:'')}"></div>
+      <div class="field"><label>Machine (optional)</label><select id="eq_machine">${machineOpts}</select></div>
+      <div class="field"><label>Location</label><input id="eq_loc" value="${esc(e?e.location:'')}"></div>
+      <div class="field"><label>Last calibrated</label><input id="eq_calon" type="date" value="${esc(e?e.calibratedOn:'')}"></div>
+      <div class="field"><label>Interval (days)</label><input id="eq_interval" type="number" min="0" value="${esc(e?e.calibrationIntervalDays:'365')}"></div>
+      <div class="field"><label>Owner</label><input id="eq_owner" value="${esc(e?e.owner:'')}"></div>
+      ${e?`<div class="field"><label>Status</label><select id="eq_active"><option value="true" ${e.active!==false?'selected':''}>Active</option><option value="false" ${e.active===false?'selected':''}>Retired</option></select></div>`:''}
+    </div>
+    <div class="field"><label>Notes</label><textarea id="eq_notes">${esc(e?e.notes:'')}</textarea></div>
+    <div class="row-actions"><button class="btn gold" onclick="saveEquip(${e?`'${jsq(e.id)}'`:'null'})">Save</button><button class="btn ghost" onclick="closeModal()">Cancel</button></div></div></div>`;
+}
+async function saveEquip(id){
+  const body={ name:val("eq_name").trim(), type:val("eq_type"), identifier:val("eq_ident").trim(), machine:val("eq_machine"), location:val("eq_loc").trim(), calibratedOn:val("eq_calon"), calibrationIntervalDays:Number(val("eq_interval"))||0, owner:val("eq_owner").trim(), notes:val("eq_notes") };
+  if(!body.name){ toast("Equipment name is required"); return; }
+  const act=document.getElementById("eq_active"); if(act) body.active=(act.value==='true');
+  try{ if(id) await api("/api/equipment/"+encodeURIComponent(id),{method:"PUT",body}); else await api("/api/equipment",{method:"POST",body});
+    closeModal(); toast("Equipment saved"); equipmentPage();
+  }catch(e){ toast(e.message); }
+}
+function calibrateModal(id){ const e=(window._equip||[]).find(x=>x.id===id); if(!e)return;
+  $("#modalRoot").innerHTML=`<div class="modal-bg"><div class="modal"><h2>Record calibration</h2><p class="sub">${esc(e.id)} · ${esc(e.name)}</p>
+    <div class="grid g3">
+      <div class="field"><label>Date</label><input id="cal_on" type="date" value="${esc(new Date().toISOString().slice(0,10))}"></div>
+      <div class="field"><label>Result</label><select id="cal_result"><option>Pass</option><option>Pass (adjusted)</option><option>Fail</option></select></div>
+      <div class="field"><label>Interval (days)</label><input id="cal_interval" type="number" min="0" value="${esc(e.calibrationIntervalDays||365)}"></div>
+    </div>
+    <div class="field"><label>Notes</label><textarea id="cal_notes" placeholder="Standard used, as-found reading, technician…"></textarea></div>
+    <div class="row-actions"><button class="btn gold" onclick="doCalibrate('${jsq(e.id)}')">Save calibration</button><button class="btn ghost" onclick="closeModal()">Cancel</button></div></div></div>`;
+}
+async function doCalibrate(id){ const body={ on:val("cal_on"), result:val("cal_result"), intervalDays:Number(val("cal_interval"))||undefined, notes:val("cal_notes") };
+  try{ await api("/api/equipment/"+encodeURIComponent(id)+"/calibrate",{method:"POST",body}); closeModal(); toast("Calibration recorded"); equipmentPage(); }catch(e){ toast(e.message); }
+}
+
+/* executive dashboard (RAG vs targets) */
+async function execDashboard(){
+  app().innerHTML=`<div class="empty">Loading…</div>`;
+  let d; try{ d=await api("/api/exec"); }catch(e){ app().innerHTML=`<div class="card"><div class="empty">Could not load — ${esc(e.message)}</div></div>`; return; }
+  const ragCard=k=>`<div class="stat rag-${esc(k.rag)}"><div class="n">${esc(k.value)}${k.unit==='%'?'%':''}</div><div class="l">${esc(k.label)}</div><div class="rag-target">target ${k.dir==='min'?'≥':'≤'} ${esc(k.target)}${k.unit==='%'?'%':''}</div></div>`;
+  const listCard=(title,items,render,empty)=>`<div class="card" style="margin-bottom:0"><h3 style="margin-top:0">${title}</h3>${items.length?items.map(render).join(""):`<p class="sub">${empty}</p>`}</div>`;
+  app().innerHTML=`<div class="card no-print"><div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap"><div><h2 style="margin:0">Executive Overview</h2><p class="sub" style="margin:4px 0 0">${esc(d.org)} · live KPIs vs targets · ${esc(new Date(d.generated).toLocaleString())}</p></div><div style="margin-left:auto" class="no-print"><button class="btn ghost sm" onclick="go('settings')">Edit targets</button></div></div>
+      <div class="stats" style="margin-bottom:0">${d.kpis.map(ragCard).join("")}</div></div>
+    <div class="grid g2">
+      ${listCard('Overdue CAPAs', d.lists.overdueCapas, c=>`<div style="padding:8px 0;border-bottom:1px solid var(--line)"><b>${esc(c.id)}</b> ${capaSevPill(c.severity)} — ${esc(c.title)} <span class="flag bad">due ${esc(c.dueDate)}</span></div>`, 'None overdue. 👍')}
+      ${listCard('Overdue calibrations', d.lists.overdueCal, e=>`<div style="padding:8px 0;border-bottom:1px solid var(--line)"><b>${esc(e.name)}</b> <span class="flag bad">due ${esc(e.nextDue)} (${Math.abs(e.days)}d ago)</span></div>`, 'All equipment in calibration. 👍')}
+    </div>
+    <div class="grid g2" style="margin-top:18px">
+      ${listCard('Calibrations due soon', d.lists.dueSoonCal, e=>`<div style="padding:8px 0;border-bottom:1px solid var(--line)">${esc(e.name)} <span class="flag">due ${esc(e.nextDue)} (in ${esc(e.days)}d)</span></div>`, 'Nothing due in the next 2 weeks.')}
+      ${listCard('Jobs on hold / rejected', d.lists.holds, h=>`<div style="padding:8px 0;border-bottom:1px solid var(--line)"><button class="btn ghost sm" onclick="go('lookup',{jobNo:'${jsq(h.jobNo)}'})">${esc(h.jobNo)}</button> ${statusPill(h.status)} ${esc(h.product||'')}</div>`, 'No jobs on hold or rejected.')}
+    </div>`;
+}
+
 /* team & access */
 async function team(){
   const canManage=["Quality Manager","Administrator"].includes(ME.role);
@@ -579,6 +670,7 @@ async function settings(){
   let health=null; try{ health=await (await fetch("/api/health")).json(); }catch(e){}
   app().innerHTML=`<div class="card"><h2>Settings</h2><p class="sub">Tolerances, master data, integrations and storage.</p>
     <h3>Tolerances (auto pass/fail)</h3><div class="grid g4">${fT("t_cofMin","COF min",md.tolerances.cofMin)}${fT("t_cofMax","COF max",md.tolerances.cofMax)}${fT("t_reg","Registration max (mm)",md.tolerances.registrationMaxMm)}${fT("t_bc","Barcode min grade",md.tolerances.barcodeMinGrade)}</div><div class="row-actions"><button class="btn gold sm" onclick="saveTol()">Save tolerances</button></div>
+    <h3>KPI targets (Executive dashboard)</h3><div class="grid g4">${fT("tg_fpy","First-pass yield min (%)",(md.targets||{}).fpyMin)}${fT("tg_capa","Open CAPAs max",(md.targets||{}).openCapasMax)}${fT("tg_cal","Overdue calibrations max",(md.targets||{}).overdueCalMax)}${fT("tg_hold","Hold/Reject jobs max",(md.targets||{}).holdRejectMax)}</div><div class="row-actions"><button class="btn gold sm" onclick="saveTargets()">Save targets</button></div>
     <h3>Defect types</h3><textarea id="a_def" style="min-height:80px">${esc((md.defectTypes||[]).join(", "))}</textarea><div class="row-actions"><button class="btn ghost sm" onclick="saveDefects()">Save defect list</button></div>
     <h3>Business Central test</h3><div style="display:flex;gap:8px;max-width:520px"><input id="bcNo" placeholder="Job #"><button class="btn ghost sm" onclick="bcTest()">Lookup</button></div><pre id="bcOut" style="white-space:pre-wrap;background:#f4f7fb;padding:10px;border-radius:8px;font-size:12px"></pre>
     <h3>Backups &amp; storage</h3><div class="kv">
@@ -598,6 +690,8 @@ async function doRestore(){ const name=val("rs_name"); if(!name){ toast("No back
   if(!confirm("Restore '"+name+"'? This replaces ALL current data. A safety backup is taken first.")) return;
   try{ const r=await api("/api/admin/restore",{method:"POST",body:{name}}); toast("Restored "+r.restored+" — "+r.jobs+" jobs, "+r.users+" users"); MD=await api("/api/masterdata"); go("dashboard"); }catch(e){ toast(e.message); }
 }
+async function saveTargets(){ const t={ fpyMin:Number(val("tg_fpy"))||0, openCapasMax:Number(val("tg_capa"))||0, overdueCalMax:Number(val("tg_cal"))||0, holdRejectMax:Number(val("tg_hold"))||0 };
+  MD.targets=t; try{ await api("/api/masterdata",{method:"PUT",body:{targets:t}}); toast("KPI targets saved"); }catch(e){ toast(e.message); } }
 /* my account */
 function myAccount(){
   app().innerHTML=`<div class="card"><h2>My Account</h2><p class="sub">Your profile and password.</p>

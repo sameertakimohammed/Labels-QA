@@ -43,8 +43,11 @@ async function loadDB() {
   if (loaded) DB = loaded; else { DB = seedDB(); await STORAGE.save(DB); }
   // forward-compat shims for databases created before these collections existed
   if (!Array.isArray(DB.capas)) DB.capas = [];
+  if (!Array.isArray(DB.equipment)) DB.equipment = [];
   if (!Array.isArray(DB.audit)) DB.audit = [];
   if (typeof DB.auditAnchor !== 'string') DB.auditAnchor = '';
+  if (!DB.masterdata) DB.masterdata = {};
+  if (!DB.masterdata.targets) DB.masterdata.targets = { fpyMin: 95, openCapasMax: 5, overdueCalMax: 0, holdRejectMax: 2 };
 }
 let _saveChain = Promise.resolve();
 function saveDB() { _saveChain = _saveChain.then(() => STORAGE.save(DB)).catch(e => console.error('saveDB failed:', e && e.message)); return _saveChain; }
@@ -74,10 +77,12 @@ function seedDB() {
       },
       defectTypes: ['Hickey','Mis-register','Ink splash','Bubble','Streak','Scratch','Colour variation','Die-cut error','Lamination defect','Foreign matter'],
       products: ['Chunk Light Tuna 142g Wrap Label','Solid White Albacore 198g Label','Chunk Light 85g Wrap Label'],
-      tolerances: CFG.tolerances
+      tolerances: CFG.tolerances,
+      targets: { fpyMin: 95, openCapasMax: 5, overdueCalMax: 0, holdRejectMax: 2 }
     },
     jobs: adminPass ? [] : seedJobs(),
     capas: adminPass ? [] : seedCapas(),
+    equipment: adminPass ? [] : seedEquipment(),
     audit: [ (function(){ const e={ ts:new Date().toISOString(), user:'system', action:'seed', jobNo:'', detail:'Database initialised' }; e.hash=auditHash('', e); return e; })() ],
     auditAnchor: ''
   };
@@ -86,6 +91,16 @@ function seedCapas() {
   return [ { id:'CAPA-24817-1', jobNo:'SK-24817', title:'Recurring hickeys on Station 1', source:'Reel Inspection (F-021)', severity:'Medium', status:'Open',
     rootCause:'Worn anilox roller depositing debris during the run.', correctiveAction:'Swap the 360 anilox on Station 1 and re-run a 500 m verification reel.', preventiveAction:'Add an anilox-condition check to the weekly preventive-maintenance sheet.',
     owner:'ateet', dueDate:'2026-06-30', createdBy:'akumar', createdAt:'2026-06-19T03:00:00.000Z', updatedAt:'2026-06-19T03:00:00.000Z', closedBy:'', closedAt:'' } ];
+}
+function seedEquipment() {
+  const now=new Date().toISOString(); const cal=(daysAgo)=>addDaysYmd(ymd(new Date()), -daysAgo);
+  const mk=(id,name,type,machine,interval,daysAgo)=>({ id, name, type, identifier:'', machine:machine||'', location:'', calibratedOn:cal(daysAgo), calibrationIntervalDays:interval, owner:'ateet', notes:'', active:true, createdBy:'admin', createdAt:now, updatedAt:now, history:[{ on:cal(daysAgo), by:'akumar', result:'Pass', notes:'Routine calibration' }] });
+  return [
+    mk('EQ-COF-01','COF Meter (film/metal)','Gauge','Flexo450',365,30),    // OK
+    mk('EQ-GS1-VER','GS1 Barcode Verifier','Verifier','',180,205),          // overdue
+    mk('EQ-MIC-03','Thickness Micrometer #3','Gauge','',365,358),           // due soon
+    mk('EQ-ANILOX-360','Station 1 Anilox 360 l/cm','Anilox','Flexo450',730,120) // OK
+  ];
 }
 function seedJobs() {
   return [
@@ -143,6 +158,23 @@ function isManager(u){ return !!u && ['Supervisor','Quality Manager','Administra
 
 const CAPA_SEVERITY = ['Low','Medium','High','Critical'];
 const CAPA_STATUS = ['Open','In Progress','Closed'];
+const EQUIP_TYPES = ['Machine','Anilox','Gauge','Verifier','Scale','Other'];
+const CAL_DUE_SOON_DAYS = Number((CFG.quality && CFG.quality.calDueSoonDays)) || 14;
+
+/* date helpers (UTC, YYYY-MM-DD) */
+function ymd(d){ return d.toISOString().slice(0,10); }
+function addDaysYmd(s, n){ const d=new Date(s+'T00:00:00Z'); d.setUTCDate(d.getUTCDate()+Number(n||0)); return ymd(d); }
+function daysFromToday(s){ if(!s) return null; const d=new Date(s+'T00:00:00Z'); const t=new Date(ymd(new Date())+'T00:00:00Z'); return Math.round((d-t)/86400000); }
+/* equipment calibration status (computed, not stored) */
+function equipView(e){
+  let nextDue='', calStatus='Unscheduled', daysToDue=null;
+  if(e.active===false){ calStatus='Retired'; }
+  else if(e.calibratedOn && Number(e.calibrationIntervalDays)>0){
+    nextDue=addDaysYmd(e.calibratedOn, e.calibrationIntervalDays); daysToDue=daysFromToday(nextDue);
+    calStatus = daysToDue<0 ? 'Overdue' : (daysToDue<=CAL_DUE_SOON_DAYS ? 'Due soon' : 'OK');
+  }
+  return Object.assign({}, e, { nextDue, calStatus, daysToDue });
+}
 
 /* In-memory login throttle (keyed by username+IP). Resets on restart; the deployment
    is single-writer, so a shared store isn't required. Tunable via config.security. */
@@ -404,6 +436,48 @@ async function api(req, res, url) {
     audit(user, c.status==='Closed'?'capa-close':'capa-update', c.jobNo, c.id); saveDB(); return send(res,200,c);
   }
 
+  if (seg[0]==='equipment' && method==='GET' && !seg[1]) {
+    let list = (DB.equipment||[]).map(equipView);
+    const fst=url.searchParams.get('status'); if(fst) list=list.filter(e=>e.calStatus===fst);
+    const fty=url.searchParams.get('type'); if(fty) list=list.filter(e=>e.type===fty);
+    return send(res,200, list);
+  }
+  if (seg[0]==='equipment' && method==='POST' && !seg[1]) {
+    if(!isManager(user)) return send(res,403,{error:'Only a Supervisor, Quality Manager or Administrator can manage equipment'});
+    const b=await readBody(req);
+    if(!String(b.name||'').trim()) return send(res,400,{error:'Equipment name is required'});
+    const now=new Date().toISOString();
+    const e={ id:'EQ-'+Date.now().toString(36).toUpperCase(), name:String(b.name).trim(), type:EQUIP_TYPES.includes(b.type)?b.type:'Other',
+      identifier:String(b.identifier||'').trim(), machine:String(b.machine||'').trim(), location:String(b.location||'').trim(),
+      calibratedOn:String(b.calibratedOn||'').trim(), calibrationIntervalDays:Number(b.calibrationIntervalDays)||0,
+      owner:String(b.owner||'').trim(), notes:String(b.notes||''), active:true, createdBy:user.id, createdAt:now, updatedAt:now, history:[] };
+    DB.equipment.push(e); audit(user,'equip-add','',e.id+': '+e.name); saveDB(); return send(res,200,equipView(e));
+  }
+  if (seg[0]==='equipment' && seg[1] && seg[2]==='calibrate' && method==='POST') {
+    if(!isManager(user)) return send(res,403,{error:'Only a Supervisor, Quality Manager or Administrator can record calibration'});
+    const e=(DB.equipment||[]).find(x=>x.id===decodeURIComponent(seg[1])); if(!e) return send(res,404,{error:'Equipment not found'});
+    const b=await readBody(req); const on=String(b.on||'').trim()||ymd(new Date());
+    if(!/^\d{4}-\d{2}-\d{2}$/.test(on)) return send(res,400,{error:'Calibration date must be YYYY-MM-DD'});
+    if(b.intervalDays!=null && Number(b.intervalDays)>0) e.calibrationIntervalDays=Number(b.intervalDays);
+    e.calibratedOn=on; e.active=true;
+    e.history=e.history||[]; e.history.push({ on, by:user.id, result:String(b.result||'Pass'), notes:String(b.notes||'') });
+    e.updatedAt=new Date().toISOString();
+    audit(user,'equip-calibrate','',e.id+' on '+on); saveDB(); return send(res,200,equipView(e));
+  }
+  if (seg[0]==='equipment' && seg[1] && method==='PUT') {
+    if(!isManager(user)) return send(res,403,{error:'Only a Supervisor, Quality Manager or Administrator can manage equipment'});
+    const e=(DB.equipment||[]).find(x=>x.id===decodeURIComponent(seg[1])); if(!e) return send(res,404,{error:'Equipment not found'});
+    const b=await readBody(req);
+    ['name','identifier','machine','location','owner','notes','calibratedOn'].forEach(k=>{ if(typeof b[k]==='string') e[k]=b[k]; });
+    if(b.type && EQUIP_TYPES.includes(b.type)) e.type=b.type;
+    if(b.calibrationIntervalDays!=null) e.calibrationIntervalDays=Number(b.calibrationIntervalDays)||0;
+    if(typeof b.active==='boolean') e.active=b.active;
+    e.updatedAt=new Date().toISOString();
+    audit(user,'equip-update','',e.id); saveDB(); return send(res,200,equipView(e));
+  }
+
+  if (seg[0]==='exec' && method==='GET') { if(!isManager(user)) return send(res,403,{error:'Not permitted'}); return send(res,200, exec()); }
+
   if (seg[0]==='bc' && seg[1]==='job' && method==='GET') { const r = await BC.lookupJob(CFG, decodeURIComponent(seg[2]||'')); return send(res, r.error?502:200, r); }
 
   if (seg[0]==='avt-import' && method==='POST') { const b=await readBody(req); const r=AVT.parse(b.csv||''); return send(res,200,r); }
@@ -464,19 +538,47 @@ function analytics(opts){
   return { defects, wasteByMachine, downtime, trend, range:{from,to,shift}, kpis:{ total, released, rejectedJobs, firstPassYield:fpy, openCapas } };
 }
 
+/* Executive summary: KPIs scored Red/Amber/Green against configurable targets. */
+function exec(){
+  const a=analytics();
+  const t=Object.assign({ fpyMin:95, openCapasMax:5, overdueCalMax:0, holdRejectMax:2 }, (DB.masterdata&&DB.masterdata.targets)||{});
+  const today=ymd(new Date());
+  const openCapas=(DB.capas||[]).filter(c=>c.status!=='Closed');
+  const overdueCapas=openCapas.filter(c=>c.dueDate&&c.dueDate<today).map(c=>({ id:c.id, jobNo:c.jobNo, title:c.title, dueDate:c.dueDate, owner:c.owner, severity:c.severity }));
+  const equip=(DB.equipment||[]).filter(e=>e.active!==false).map(equipView);
+  const overdueCal=equip.filter(e=>e.calStatus==='Overdue').map(e=>({ id:e.id, name:e.name, nextDue:e.nextDue, days:e.daysToDue }));
+  const dueSoonCal=equip.filter(e=>e.calStatus==='Due soon').map(e=>({ id:e.id, name:e.name, nextDue:e.nextDue, days:e.daysToDue }));
+  const holds=DB.jobs.filter(j=>{ const s=jobStatus(j); return s==='Hold'||s==='Rejected'; }).map(j=>({ jobNo:j.jobNo, status:jobStatus(j), product:j.product }));
+  const ragMin=(v,target)=> v>=target?'green':(v>=target*0.9?'amber':'red');
+  const ragMax=(v,target)=>{ const band=Math.max(1,Math.ceil(target*0.5)); return v<=target?'green':(v<=target+band?'amber':'red'); };
+  const kpis=[
+    { key:'fpy', label:'First-pass yield', value:a.kpis.firstPassYield, unit:'%', target:t.fpyMin, dir:'min', rag:ragMin(a.kpis.firstPassYield,t.fpyMin) },
+    { key:'openCapas', label:'Open CAPAs', value:openCapas.length, unit:'', target:t.openCapasMax, dir:'max', rag:ragMax(openCapas.length,t.openCapasMax) },
+    { key:'overdueCal', label:'Overdue calibrations', value:overdueCal.length, unit:'', target:t.overdueCalMax, dir:'max', rag:ragMax(overdueCal.length,t.overdueCalMax) },
+    { key:'holdReject', label:'Hold / reject jobs', value:a.kpis.rejectedJobs, unit:'', target:t.holdRejectMax, dir:'max', rag:ragMax(a.kpis.rejectedJobs,t.holdRejectMax) }
+  ];
+  return { generated:new Date().toISOString(), org:CFG.orgName, targets:t, kpis,
+    summary:{ totalJobs:a.kpis.total, released:a.kpis.released, inProgress:DB.jobs.filter(j=>jobStatus(j)==='In Progress').length, overdueCapas:overdueCapas.length, dueSoonCal:dueSoonCal.length },
+    lists:{ overdueCapas, overdueCal, dueSoonCal, holds } };
+}
+
 /* ---------- manager digest (emailed / Teams) ---------- */
 function buildDigest(){
-  const a=analytics();
+  const a=analytics(); const today=ymd(new Date());
   const holds=DB.jobs.filter(j=>{ const s=jobStatus(j); return s==='Hold'||s==='Rejected'; }).map(j=>({ jobNo:j.jobNo, status:jobStatus(j), product:j.product }));
   const inProgress=DB.jobs.filter(j=>jobStatus(j)==='In Progress').length;
   const topDefects=Object.entries(a.defects).sort((x,y)=>y[1]-x[1]).slice(0,5).map(([k,v])=>({ defect:k, kg:Math.round(v*100)/100 }));
-  return { org:CFG.orgName, generated:new Date().toISOString(), kpis:a.kpis, inProgress, holds, topDefects };
+  const overdueCapas=(DB.capas||[]).filter(c=>c.status!=='Closed'&&c.dueDate&&c.dueDate<today).map(c=>({ id:c.id, title:c.title, dueDate:c.dueDate }));
+  const overdueCal=(DB.equipment||[]).filter(e=>e.active!==false).map(equipView).filter(e=>e.calStatus==='Overdue').map(e=>({ id:e.id, name:e.name, nextDue:e.nextDue }));
+  return { org:CFG.orgName, generated:new Date().toISOString(), kpis:a.kpis, inProgress, holds, topDefects, overdueCapas, overdueCal };
 }
 function digestText(d){
   return [ d.org+' — QA Digest', 'Generated: '+d.generated, '',
     'Jobs: '+d.kpis.total+'   Released: '+d.kpis.released+'   Hold/Reject: '+d.kpis.rejectedJobs+'   In progress: '+d.inProgress,
     'First-pass yield: '+d.kpis.firstPassYield+'%', '',
     'On hold / rejected: '+(d.holds.length?d.holds.map(h=>h.jobNo+' ('+h.status+')').join(', '):'none'), '',
+    'Overdue CAPAs: '+((d.overdueCapas&&d.overdueCapas.length)?d.overdueCapas.map(c=>c.id+' (due '+c.dueDate+')').join(', '):'none'),
+    'Overdue calibrations: '+((d.overdueCal&&d.overdueCal.length)?d.overdueCal.map(e=>e.name+' (due '+e.nextDue+')').join(', '):'none'), '',
     'Top defects (kg): '+(d.topDefects.length?d.topDefects.map(t=>t.defect+' '+t.kg).join(', '):'none') ].join('\n');
 }
 function digestHtml(d){
@@ -487,6 +589,8 @@ function digestHtml(d){
     '<p style="color:#5b6b80;margin:0 0 14px">Generated '+e(d.generated)+'</p>'+
     '<table style="border-collapse:collapse;border:1px solid #dde5ee"><tr>'+kpi(d.kpis.total,'Jobs')+kpi(d.kpis.released,'Released')+kpi(d.kpis.rejectedJobs,'Hold/Reject')+kpi(d.inProgress,'In&nbsp;Progress')+kpi(d.kpis.firstPassYield+'%','First-pass')+'</tr></table>'+
     '<h3 style="color:#0e2a47">On hold / rejected</h3><p>'+(d.holds.length?d.holds.map(h=>e(h.jobNo)+' <b>('+e(h.status)+')</b>').join(', '):'None')+'</p>'+
+    '<h3 style="color:#b91c1c">Overdue CAPAs</h3><p>'+((d.overdueCapas&&d.overdueCapas.length)?d.overdueCapas.map(c=>e(c.id)+' — '+e(c.title)+' <b>(due '+e(c.dueDate)+')</b>').join('<br>'):'None')+'</p>'+
+    '<h3 style="color:#b91c1c">Overdue calibrations</h3><p>'+((d.overdueCal&&d.overdueCal.length)?d.overdueCal.map(x=>e(x.name)+' <b>(due '+e(x.nextDue)+')</b>').join('<br>'):'None')+'</p>'+
     '<h3 style="color:#0e2a47">Top defects (kg)</h3><p>'+(d.topDefects.length?d.topDefects.map(t=>e(t.defect)+' — '+t.kg).join('<br>'):'None')+'</p></div>';
 }
 
