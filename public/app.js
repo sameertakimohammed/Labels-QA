@@ -1105,6 +1105,8 @@ async function checklistsPage(){
       <h3 style="margin:0 0 8px">Recent submissions</h3>
       <div id="lv_chks"></div>
     </div>`;
+  window._chkSubsArchived=null;
+  const canMgr=isMgrRole();
   const defCodes={}; defs.forEach(d=>{ defCodes[d.id]=d.code; });
   listView({ key:'chks', rows:subs,
     columns:[ {label:'Code',sortVal:s=>s.code||''}, {label:'Title',sortVal:s=>s.title||''}, {label:'Date',sortVal:s=>s.date||''},
@@ -1114,16 +1116,44 @@ async function checklistsPage(){
     searchText:s=>(s.code||'')+' '+(s.title||'')+' '+(s.completedByName||s.completedBy||''), searchPlaceholder:'Code, title, person',
     filters:[
       {id:'form',label:'Form',options:defs.map(d=>d.id),optionLabel:id=>defCodes[id]||id,allLabel:'All forms',match:(s,v)=>s.defKey===v},
-      {id:'status',label:'Status',options:['Draft','Completed','Verified'],match:(s,v)=>s.status===v},
+      {id:'status',label:'Status',options:['Draft','Completed','Verified'].concat(canMgr?['Archived']:[]),
+        match:(s,v)=>v==='Archived'?true:s.status===v, onChange:chkStatusFilter},
       {id:'date',label:'Date',type:'date',match:(s,v)=>s.date===v}
     ],
     emptyText:'No checklists submitted yet.', emptyFilterText:'No checklists match these filters.' });
+  if(window._lv.chks.state.filters.status==='Archived') chkStatusFilter('Archived');
+}
+async function chkStatusFilter(v){
+  if(v==='Archived'){
+    if(!window._chkSubsArchived){
+      try{ window._chkSubsArchived=await api("/api/checklists?archived=1"); }
+      catch(e){ toast("Could not load archived checklists — "+e.message);
+        const lv=window._lv.chks; delete lv.state.filters.status; listView(lv.cfg); return; }
+    }
+    lvData('chks', window._chkSubsArchived);
+  } else {
+    lvData('chks', window._chkSubs||[]);
+  }
 }
 function chkRow(s){
+  const canMgr=isMgrRole();
   const bad=(s.responses||[]).filter(r=>r.status&&r.status!=='Yes').length;
-  const pill=s.status==='Verified'?'<span class="pill green">Verified</span>':(s.status==='Completed'?'<span class="pill amber">Completed</span>':'<span class="pill grey">Draft</span>');
-  const canVerify=isMgrRole() && s.status==='Completed';
-  return `<tr><td><b>${esc(s.code)}</b></td><td>${esc(s.title)}${bad?` <span class="pill red" title="Unsatisfactory items">${bad}✕</span>`:''}</td><td>${esc(s.date)}</td><td>${esc(s.shift||'—')}</td><td>${pill}</td><td>${esc(s.completedByName||s.completedBy||'')}</td><td>${esc(s.verifiedByName||s.verifiedBy||'—')}</td><td class="no-print"><button class="btn ghost sm" onclick="chkView('${jsq(s.id)}')">View</button> ${canVerify?`<button class="btn gold sm" onclick="chkVerify('${jsq(s.id)}')">Verify</button>`:''} <button class="btn ghost sm" onclick="openAmend('${jsq(s.id)}','${jsq(s.code+' '+s.date)}')">Amendments</button></td></tr>`;
+  const pill=s.archived?'<span class="pill grey">Archived</span>':(s.status==='Verified'?'<span class="pill green">Verified</span>':(s.status==='Completed'?'<span class="pill amber">Completed</span>':'<span class="pill grey">Draft</span>'));
+  const canVerify=canMgr && !s.archived && s.status==='Completed';
+  const actions=s.archived
+    ?`<button class="btn ghost sm" onclick="chkView('${jsq(s.id)}')">View</button> <button class="btn gold sm" onclick="restoreChk('${jsq(s.id)}')">Restore</button> <button class="btn ghost sm" onclick="openAmend('${jsq(s.id)}','${jsq(s.code+' '+s.date)}')">Amendments</button>`
+    :`<button class="btn ghost sm" onclick="chkView('${jsq(s.id)}')">View</button> ${canVerify?`<button class="btn gold sm" onclick="chkVerify('${jsq(s.id)}')">Verify</button>`:''} <button class="btn ghost sm" onclick="openAmend('${jsq(s.id)}','${jsq(s.code+' '+s.date)}')">Amendments</button>${canMgr?` <button class="btn danger sm" onclick="archiveChk('${jsq(s.id)}')">Delete</button>`:''}`;
+  return `<tr><td><b>${esc(s.code)}</b></td><td>${esc(s.title)}${bad?` <span class="pill red" title="Unsatisfactory items">${bad}✕</span>`:''}</td><td>${esc(s.date)}</td><td>${esc(s.shift||'—')}</td><td>${pill}</td><td>${esc(s.completedByName||s.completedBy||'')}</td><td>${esc(s.verifiedByName||s.verifiedBy||'—')}</td><td class="no-print">${actions}</td></tr>`;
+}
+/* "Delete" = archive: the submission stays in exports and the audit trail, can be restored from
+   Status → Archived, and no longer counts toward the form's daily/monthly done status. */
+async function archiveChk(id){
+  const s=(window._chkSubs||[]).find(x=>x.id===id); if(!s)return;
+  if(!confirm(`Delete ${s.code} (${s.date})?\n\nIt will be hidden from the list and the form will show as due again for that period; the record is kept and can be restored from Status → Archived.`)) return;
+  try{ await api("/api/checklists/"+encodeURIComponent(id),{method:"DELETE"}); toast("Checklist archived"); checklistsPage(); }catch(err){ toast(err.message); }
+}
+async function restoreChk(id){
+  try{ await api("/api/checklists/"+encodeURIComponent(id)+"/restore",{method:"POST"}); toast("Checklist restored"); checklistsPage(); }catch(err){ toast(err.message); }
 }
 function chkPick(){
   const id=val("chk_def"); const def=(window._chkDefs||[]).find(d=>d.id===id); const host=$("#chkform"); if(!host)return;

@@ -639,7 +639,7 @@ function isoWeekKey(ymd){ // ISO-8601 week label, e.g. "2026-W28" (stable per-we
 }
 function dueByHourOf(def){ const n=Number(def && def.dueByHour); return (def && def.dueByHour!=null && !isNaN(n) && n>=0 && n<=23) ? n : 12; }
 function checklistDue(def){
-  const subs=(DB.checklists||[]).filter(c=>c.defKey===def.id && (c.status==='Completed'||c.status==='Verified'));
+  const subs=(DB.checklists||[]).filter(c=>!c.archived && c.defKey===def.id && (c.status==='Completed'||c.status==='Verified'));
   const today=todayYmd(); const month=today.slice(0,7);
   const last=subs.map(c=>c.date).filter(Boolean).sort().slice(-1)[0]||'';
   const freq=CHECKLIST_FREQ.includes(def.frequency)?def.frequency:'daily';
@@ -1396,7 +1396,9 @@ async function api(req, res, url) {
   /* ----- Checklist SUBMISSIONS (dated records, two-person sign-off) ----- */
   if (seg[0]==='checklists' && seg[1]==='due' && method==='GET') return send(res,200, checklistsDue());
   if (seg[0]==='checklists' && method==='GET' && !seg[1]) {
-    let list=(DB.checklists||[]).slice();
+    // Archived submissions are hidden by default; ?archived=1 lists only them.
+    const arch=url.searchParams.get('archived')==='1';
+    let list=(DB.checklists||[]).filter(c=>arch?c.archived:!c.archived);
     const fd=url.searchParams.get('defKey'); if(fd) list=list.filter(c=>c.defKey===fd);
     const fs_=url.searchParams.get('status'); if(fs_) list=list.filter(c=>c.status===fs_);
     const fdt=url.searchParams.get('date'); if(fdt) list=list.filter(c=>c.date===fdt);
@@ -1423,6 +1425,7 @@ async function api(req, res, url) {
   if (seg[0]==='checklists' && seg[1] && seg[2]==='verify' && method==='POST') {
     if(!isManager(user)) return send(res,403,{error:'Only a Supervisor, Quality Manager or Administrator can verify a checklist'});
     const sub=(DB.checklists||[]).find(x=>x.id===decodeURIComponent(seg[1])); if(!sub) return send(res,404,{error:'Checklist not found'});
+    if(sub.archived) return send(res,409,{error:'Checklist is archived — restore it first'});
     if(sub.status!=='Completed') return send(res,409,{error:'Only a completed checklist can be verified'});
     if(sub.completedBy===user.id) return send(res,403,{error:'A checklist must be verified by someone other than the person who completed it'});
     sub.verifiedBy=user.id; sub.verifiedByName=user.name||user.id; sub.verifiedAt=new Date().toISOString(); sub.status='Verified'; sub.updatedAt=sub.verifiedAt;
@@ -1432,6 +1435,7 @@ async function api(req, res, url) {
   }
   if (seg[0]==='checklists' && seg[1] && method==='PUT') {
     const sub=(DB.checklists||[]).find(x=>x.id===decodeURIComponent(seg[1])); if(!sub) return send(res,404,{error:'Checklist not found'});
+    if(sub.archived) return send(res,409,{error:'Checklist is archived — restore it first'});
     const def=(DB.checklistDefs||[]).find(d=>d.id===sub.defKey)||{items:[]};
     const b=await readBody(req); const before=JSON.parse(JSON.stringify(sub)); const wasComplete=sub.status==='Completed'||sub.status==='Verified';
     if(Array.isArray(b.responses)) sub.responses=cleanChecklistResponses(b.responses);
@@ -1448,6 +1452,26 @@ async function api(req, res, url) {
     audit(user,'checklist-update',{ recordType:'checklist', recordId:sub.id, detail:sub.code+' '+sub.date, changes:auditDiff(before, sub) }); saveDB();
     if(becameComplete) emailChecklist(sub, def, 'completed');
     return send(res,200,sub);
+  }
+  // DELETE = archive, mirroring equipment/CAPA/NCR: hidden until restored, record and audit trail
+  // kept. An archived submission no longer counts toward a form's daily/monthly done status.
+  if (seg[0]==='checklists' && seg[1] && !seg[2] && method==='DELETE') {
+    if(!isManager(user)) return send(res,403,{error:'Only a Supervisor, Quality Manager or Administrator can delete a checklist'});
+    const sub=(DB.checklists||[]).find(x=>x.id===decodeURIComponent(seg[1])); if(!sub) return send(res,404,{error:'Checklist not found'});
+    if(sub.archived) return send(res,409,{error:'Checklist is already archived'});
+    const before=JSON.parse(JSON.stringify(sub));
+    sub.archived=true; sub.archivedAt=new Date().toISOString(); sub.archivedBy=user.id; sub.updatedAt=sub.archivedAt;
+    audit(user,'checklist-archive',{ recordType:'checklist', recordId:sub.id, detail:sub.code+' '+sub.date, changes:auditDiff(before, sub) });
+    saveDB(); return send(res,200,{ ok:true });
+  }
+  if (seg[0]==='checklists' && seg[1] && seg[2]==='restore' && method==='POST') {
+    if(!isManager(user)) return send(res,403,{error:'Only a Supervisor, Quality Manager or Administrator can restore a checklist'});
+    const sub=(DB.checklists||[]).find(x=>x.id===decodeURIComponent(seg[1])); if(!sub) return send(res,404,{error:'Checklist not found'});
+    if(!sub.archived) return send(res,409,{error:'Checklist is not archived'});
+    const before=JSON.parse(JSON.stringify(sub));
+    delete sub.archived; delete sub.archivedAt; delete sub.archivedBy; sub.updatedAt=new Date().toISOString();
+    audit(user,'checklist-restore',{ recordType:'checklist', recordId:sub.id, detail:sub.code+' '+sub.date, changes:auditDiff(before, sub) });
+    saveDB(); return send(res,200,{ ok:true });
   }
 
   if (seg[0]==='exec' && method==='GET') { if(!isManager(user)) return send(res,403,{error:'Not permitted'}); return send(res,200, exec()); }
