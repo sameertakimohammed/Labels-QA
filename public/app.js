@@ -28,8 +28,8 @@ const RUN_COLS = [
 /* Stage-3 in-process check columns */
 const PROC_COLS = [
   {k:"time",label:"Time Checked"},{k:"sheetSize",label:"Sheet Cutting Size L×W (mm)"},{k:"repeatVariation",label:"Repeat Variation from Eyemark"},
-  {k:"printQuality",label:"Print Quality"},{k:"varnishPosition",label:"Varnish Position"},{k:"barcode",label:"Barcode Verification"},
-  {k:"sheetAppearance",label:"Sheet Appearance"},{k:"sheetStackQuality",label:"Sheet Stack Quality"},{k:"comments",label:"Comments"}
+  {k:"printQuality",label:"Print Quality",opts:PASS_FAIL},{k:"varnishPosition",label:"Varnish Position",opts:CORRECT},{k:"barcode",label:"Barcode Verification",opts:CORRECT},
+  {k:"sheetAppearance",label:"Sheet Appearance",opts:["","Flat","Curling up","Curling down"]},{k:"sheetStackQuality",label:"Sheet Stack Quality",opts:["","Straight","Leaning"]},{k:"comments",label:"Comments"}
 ];
 const WASTE_COLS = [
   {k:"setup",label:"Set-up"},{k:"printDefects",label:"Print Defects"},{k:"coreWinding",label:"Core Winding"},
@@ -508,7 +508,12 @@ function ckDel(i){ syncStage("stage4"); window._checks.splice(i,1); if(!window._
 /* generic repeating table bound to a window array (e.g. _materials, _runs, _proc, _prod, _waste) */
 const ARR_STAGE={ _materials:"stage1", _runs:"stage1", _proc:"stage3", _prod:"stage3", _waste:"stage3" };
 function cellField(arrKey,i,c){ const r=window[arrKey][i]||{}; const v=r[c.k]||""; const a=`data-arr="${arrKey}" data-i="${i}" data-f="${esc(c.k)}"`;
-  return c.opts?`<td><select ${a}>${c.opts.map(o=>`<option ${o===v?'selected':''}>${esc(o)}</option>`).join("")}</select></td>`:`<td><input ${a} value="${esc(v)}" style="min-width:110px"></td>`; }
+  /* a saved value outside the option set (e.g. free-text "OK" recorded before a column became a
+     dropdown) stays selectable, so re-saving an old record doesn't silently blank it */
+  const opts=c.opts&&v&&!c.opts.includes(v)?c.opts.concat(v):c.opts;
+  /* explicit value= so select.value round-trips byte-for-byte — without it the browser falls back
+     to the option TEXT, which whitespace-collapses (e.g. legacy "OK " would re-save as "OK") */
+  return opts?`<td><select ${a}>${opts.map(o=>`<option value="${esc(o)}" ${o===v?'selected':''}>${esc(o)}</option>`).join("")}</select></td>`:`<td><input ${a} value="${esc(v)}" style="min-width:110px"></td>`; }
 function collectArr(arrKey){ document.querySelectorAll('[data-arr="'+arrKey+'"]').forEach(el=>{ const x=window[arrKey][+el.dataset.i]; if(x)x[el.dataset.f]=el.value; }); }
 function rowAdd(arrKey){ const st=ARR_STAGE[arrKey]; syncStage(st); window[arrKey].push({}); stageForm(st); }
 function rowDel(arrKey,i){ const st=ARR_STAGE[arrKey]; syncStage(st); window[arrKey].splice(i,1); if(!window[arrKey].length)window[arrKey].push({}); stageForm(st); }
