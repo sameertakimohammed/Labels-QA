@@ -457,7 +457,16 @@ async function createJob(){
 let JOB=null;
 async function entry(){
   if(!CUR.jobNo){ const jobs=await api("/api/jobs");
-    app().innerHTML=`<div class="card"><h2>Data Entry</h2><p class="sub">Choose a job.</p>${jobs.length?`<div class="field" style="max-width:460px"><label>Select Job #</label><select onchange="if(this.value)go('entry',{jobNo:this.value})"><option value="">— Select —</option>${jobs.map(j=>`<option value="${esc(j.jobNo)}">${esc(j.jobNo)} — ${esc(j.product||'')}</option>`).join("")}</select></div>`:`<div class="empty">No jobs. <button class="btn gold" onclick="go('new')">+ New Job</button></div>`}</div>`; return; }
+    app().innerHTML=`<div class="card"><h2>Data Entry</h2><p class="sub">Choose a job to record inspection data against.</p><div id="lv_entryjobs"></div>
+      <div class="row-actions"><button class="btn gold" onclick="go('new')">+ New Job</button></div></div>`;
+    listView({ key:'entryjobs', rows:jobs,
+      columns:[ {label:'Job #',sortVal:j=>j.jobNo}, {label:'Product',sortVal:j=>j.product||''}, {label:'Machine',sortVal:j=>mlabel(j.machine)},
+        {label:'Progress',sortVal:j=>j.completed||0}, {label:'Status',sortVal:j=>j.status}, {label:''} ],
+      rowHTML:jobRow,
+      searchText:j=>(j.jobNo||'')+' '+(j.product||'')+' '+(j.customer||''), searchPlaceholder:'Job #, product, customer',
+      filters:[ {id:'status',label:'Status',options:['New','In Progress','Released','Hold','Rejected'],match:(j,v)=>j.status===v} ],
+      emptyText:'No jobs yet — create one to start recording.', emptyFilterText:'No jobs match the filter.' });
+    return; }
   JOB=await api("/api/jobs/"+encodeURIComponent(CUR.jobNo));
   if(!STAGES.some(s=>s.key===CUR.stage)) CUR.stage="stage1"; // e.g. stale nav to the removed stage2
   const done=n=>JOB["stage"+n]&&JOB["stage"+n]._done; const c=FLOW.filter(done).length;
@@ -677,12 +686,22 @@ function closeModal(){ if(window._scanInt)clearInterval(window._scanInt); if(win
 /* lookup */
 async function lookup(){
   const pre=CUR.jobNo||"";
-  app().innerHTML=`<div class="card no-print"><h2>Job # Lookup</h2><p class="sub">Type or scan a Job # for the full cross-stage record.</p><div style="display:flex;gap:10px;max-width:560px"><input id="lk" placeholder="Job #" value="${esc(pre)}" style="font-size:19px"><button class="btn ghost" onclick="scanBarcode('lk')">📷</button><button class="btn gold" onclick="doLook()">Search</button></div></div><div id="lkr"></div>`;
+  app().innerHTML=`<div class="card no-print"><h2>Job # Lookup</h2><p class="sub">Type or scan a Job # for the full cross-stage record, or pick from the list.</p><div style="display:flex;gap:10px;max-width:560px"><input id="lk" placeholder="Job #" value="${esc(pre)}" style="font-size:19px"><button class="btn ghost" onclick="scanBarcode('lk')">📷</button><button class="btn gold" onclick="doLook()">Search</button></div></div><div id="lkr"></div><div class="card no-print" id="lkbrowse"><h3 style="margin:0 0 8px">Browse jobs</h3><div id="lv_lookupjobs"></div></div>`;
   const lk=$("#lk"); if(lk){ lk.onkeydown=(e)=>{ if(e.key==="Enter"){ e.preventDefault(); doLook(); } }; if(!pre) lk.focus(); }
+  let jobs=[]; try{ jobs=await api("/api/jobs"); }catch(e){ jobs=[]; }
+  listView({ key:'lookupjobs', rows:jobs,
+    columns:[ {label:'Job #',sortVal:j=>j.jobNo}, {label:'Product',sortVal:j=>j.product||''}, {label:'Machine',sortVal:j=>mlabel(j.machine)},
+      {label:'Created',sortVal:j=>j.created||''}, {label:'Status',sortVal:j=>j.status}, {label:''} ],
+    rowHTML:j=>`<tr><td><b>${esc(j.jobNo)}</b></td><td>${esc(j.product||'')}<div style="font-size:12px;color:var(--muted)">${esc(j.customer||'')}</div></td><td><span class="tag-machine">${esc(mlabel(j.machine))}</span></td><td>${esc(j.created||'—')}</td><td>${statusPill(j.status)}</td><td><button class="btn ghost sm" onclick="go('lookup',{jobNo:'${jsq(j.jobNo)}'})">View</button></td></tr>`,
+    searchText:j=>(j.jobNo||'')+' '+(j.product||'')+' '+(j.customer||''), searchPlaceholder:'Job #, product, customer',
+    filters:[ {id:'status',label:'Status',options:['New','In Progress','Released','Hold','Rejected'],match:(j,v)=>j.status===v} ],
+    emptyText:'No jobs yet.', emptyFilterText:'No jobs match the filter.' });
   if(pre)doLook();
 }
-async function doLook(){ const no=$("#lk").value.trim(); const host=$("#lkr"); if(!no){host.innerHTML="";return;}
-  let j; try{ j=await api("/api/jobs/"+encodeURIComponent(no)); }catch(e){ host.innerHTML=`<div class="card"><div class="empty">No job found for <b>${esc(no)}</b>.</div></div>`; return; }
+async function doLook(){ const no=$("#lk").value.trim(); const host=$("#lkr"); const br=$("#lkbrowse");
+  if(!no){host.innerHTML=""; if(br)br.classList.remove("hidden"); return;}
+  let j; try{ j=await api("/api/jobs/"+encodeURIComponent(no)); }catch(e){ host.innerHTML=`<div class="card"><div class="empty">No job found for <b>${esc(no)}</b>.</div></div>`; if(br)br.classList.remove("hidden"); return; }
+  if(br)br.classList.add("hidden"); // a loaded record replaces the browse list
   const done=n=>j["stage"+n]&&j["stage"+n]._done; const c=FLOW.filter(done).length;
   const kv=(l,v)=>`<div><span>${l}</span><b>${esc(v||"—")}</b></div>`;
   const kvb=ps=>`<div class="kv">${ps.map(p=>kv(p[0],p[1])).join("")}</div>`;
@@ -1290,14 +1309,25 @@ async function auditTrail(){
       <div class="field"><label>From</label><input id="au_from" type="date" onchange="auditLoad()"></div>
       <div class="field"><label>To</label><input id="au_to" type="date" onchange="auditLoad()"></div>
     </div>
-    <div id="auditRows"><div class="empty">Loading…</div></div></div>`;
+    <div id="lv_audit"></div></div>`;
+  /* server-side filters above feed lvData; the list itself is client-paged/sorted (toolbar:false —
+     one filter bar per view) */
+  listView({ key:'audit', rows:[], toolbar:false,
+    columns:[ {label:'Time',sortVal:x=>x.ts||''}, {label:'User',sortVal:x=>x.user||''}, {label:'Action',sortVal:x=>x.action||''},
+      {label:'Record',sortVal:x=>x.recordId||x.jobNo||''}, {label:'Changes'} ],
+    rowHTML:auditRow,
+    emptyText:'No matching amendments.', emptyFilterText:'No matching amendments.' });
   auditLoad();
+}
+function auditRow(x){
+  const chg=(x.changes&&x.changes.length)?x.changes.map(c=>`<div><b>${esc(c.field)}</b>: <span style="color:var(--muted)">${esc(String(c.from)||'∅')}</span> → ${esc(String(c.to)||'∅')}</div>`).join(""):esc(x.detail||'');
+  return `<tr><td style="white-space:nowrap">${esc((x.ts||'').replace('T',' ').slice(0,19))}</td><td>${esc(x.user)}</td><td>${esc(x.action)}</td><td>${esc(x.recordId||x.jobNo||'')}</td><td>${chg}</td></tr>`;
 }
 function auditQuery(){ const p=new URLSearchParams(); const rec=val("au_rec").trim(); const t=val("au_type"), f=val("au_from"), to=val("au_to");
   if(rec){ p.set('recordId',rec); p.set('jobNo',rec); } // match either a record id or a job number
   if(t) p.set('recordType',t); if(f) p.set('from',f); if(to) p.set('to',to); p.set('limit','1000'); return p.toString(); }
 async function auditLoad(){
-  const host=$("#auditRows"); if(!host)return;
+  if(!window._lv.audit || !document.getElementById("lv_audit"))return;
   // recordId and jobNo are ANDed server-side; when the user types one value we want OR, so query twice if needed.
   const rec=val("au_rec").trim();
   let list=[];
@@ -1307,11 +1337,9 @@ async function auditLoad(){
       const byJob=await api("/api/audit?jobNo="+encodeURIComponent(rec)+"&"+base.toString());
       const seen=new Set(); list=[...byId,...byJob].filter(e=>{ const k=e.ts+e.action+(e.recordId||''); if(seen.has(k))return false; seen.add(k); return true; });
     } else { list=await api("/api/audit?"+auditQuery()); }
-  }catch(e){ host.innerHTML=`<div class="empty">${esc(e.message)}</div>`; return; }
-  host.innerHTML=`<div style="overflow-x:auto;max-height:66vh;overflow-y:auto"><table><thead><tr><th>Time</th><th>User</th><th>Action</th><th>Record</th><th>Changes</th></tr></thead><tbody>${list.length?list.map(x=>{
-    const chg=(x.changes&&x.changes.length)?x.changes.map(c=>`<div><b>${esc(c.field)}</b>: <span style="color:var(--muted)">${esc(String(c.from)||'∅')}</span> → ${esc(String(c.to)||'∅')}</div>`).join(""):esc(x.detail||'');
-    return `<tr><td style="white-space:nowrap">${esc((x.ts||'').replace('T',' ').slice(0,19))}</td><td>${esc(x.user)}</td><td>${esc(x.action)}</td><td>${esc(x.recordId||x.jobNo||'')}</td><td>${chg}</td></tr>`;
-  }).join(""):`<tr><td colspan="5" style="color:var(--muted)">No matching amendments.</td></tr>`}</tbody></table></div>`;
+  }catch(e){ toast(e.message); list=[]; }
+  window._lv.audit.state.page=0; // a filter change means a new result set — jump back to page 1
+  lvData('audit', list);
 }
 function auditExport(){ dlAuth("/api/audit/export.csv?"+auditQuery(), "golden-qa-amendments-history.csv"); }
 async function verifyAudit(){ const host=$("#auditVerify"); if(host)host.innerHTML='<span class="sub">Checking…</span>';
