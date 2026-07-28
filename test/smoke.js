@@ -466,6 +466,53 @@ async function main() {
     eq('CAPA effectiveness verify -> 200', r.status, 200);
     ok('effectiveness recorded with verifier', !!(r.body && r.body.effectiveness === 'Verified' && r.body.verifiedBy === 'admin' && r.body.verifiedAt), JSON.stringify(r.body && { e: r.body.effectiveness, by: r.body.verifiedBy }));
 
+    // 27b. CAPA archive (DELETE = soft archive; hidden from list + KPIs; restorable)
+    r = await request('POST', '/api/capas', { title: 'Arch CAPA ' + PID, severity: 'High', dueDate: '2020-01-01' }, adminToken);
+    const arcCapa = r.body && r.body.id;
+    r = await request('DELETE', '/api/capas/' + encodeURIComponent(arcCapa), undefined, officerToken);
+    eq('non-manager DELETE capa -> 403', r.status, 403);
+    r = await request('DELETE', '/api/capas/' + encodeURIComponent(arcCapa), undefined, adminToken);
+    eq('DELETE /api/capas/:id (archive) -> 200', r.status, 200);
+    r = await request('GET', '/api/capas', undefined, adminToken);
+    ok('archived CAPA hidden from default list', !(r.body || []).some((c) => c.id === arcCapa), arcCapa);
+    r = await request('GET', '/api/capas?archived=1', undefined, adminToken);
+    ok('archived CAPA listed via ?archived=1', (r.body || []).some((c) => c.id === arcCapa && c.archived === true && c.archivedBy === 'admin'), JSON.stringify(r.body && r.body.length));
+    r = await request('GET', '/api/exec', undefined, adminToken);
+    ok('archived CAPA excluded from exec overdue list', !((r.body.lists || {}).overdueCapas || []).some((c) => c.id === arcCapa), arcCapa);
+    r = await request('PUT', '/api/capas/' + encodeURIComponent(arcCapa), { title: 'nope' }, adminToken);
+    eq('PUT archived CAPA -> 409', r.status, 409);
+    r = await request('DELETE', '/api/capas/' + encodeURIComponent(arcCapa), undefined, adminToken);
+    eq('archive an archived CAPA -> 409', r.status, 409);
+    r = await request('POST', '/api/capas/' + encodeURIComponent(arcCapa) + '/restore', undefined, adminToken);
+    eq('POST /api/capas/:id/restore -> 200', r.status, 200);
+    r = await request('GET', '/api/capas', undefined, adminToken);
+    const restCapa = (r.body || []).find((c) => c.id === arcCapa);
+    ok('restored CAPA back in list without archive fields', !!restCapa && !restCapa.archived && !restCapa.archivedBy, JSON.stringify(restCapa && { a: restCapa.archived }));
+    r = await request('POST', '/api/capas/' + encodeURIComponent(arcCapa) + '/restore', undefined, adminToken);
+    eq('restore a non-archived CAPA -> 409', r.status, 409);
+
+    // 27c. NCR archive (same semantics; promote is blocked while archived)
+    r = await request('POST', '/api/ncrs', { description: 'Arch NCR ' + PID, disposition: 'Rework' }, adminToken);
+    const arcNcr = r.body && r.body.id;
+    r = await request('DELETE', '/api/ncrs/' + encodeURIComponent(arcNcr), undefined, officerToken);
+    eq('non-manager DELETE ncr -> 403', r.status, 403);
+    r = await request('DELETE', '/api/ncrs/' + encodeURIComponent(arcNcr), undefined, adminToken);
+    eq('DELETE /api/ncrs/:id (archive) -> 200', r.status, 200);
+    r = await request('GET', '/api/ncrs', undefined, adminToken);
+    ok('archived NCR hidden from default list', !(r.body || []).some((n) => n.id === arcNcr), arcNcr);
+    r = await request('GET', '/api/ncrs?archived=1', undefined, adminToken);
+    ok('archived NCR listed via ?archived=1', (r.body || []).some((n) => n.id === arcNcr && n.archived === true), JSON.stringify(r.body && r.body.length));
+    r = await request('POST', '/api/ncrs/' + encodeURIComponent(arcNcr) + '/capa', undefined, adminToken);
+    eq('promote archived NCR -> 409', r.status, 409);
+    r = await request('PUT', '/api/ncrs/' + encodeURIComponent(arcNcr), { description: 'nope' }, adminToken);
+    eq('PUT archived NCR -> 409', r.status, 409);
+    r = await request('POST', '/api/ncrs/' + encodeURIComponent(arcNcr) + '/restore', undefined, adminToken);
+    eq('POST /api/ncrs/:id/restore -> 200', r.status, 200);
+    r = await request('GET', '/api/ncrs', undefined, adminToken);
+    ok('restored NCR back in default list', (r.body || []).some((n) => n.id === arcNcr && !n.archived), arcNcr);
+    r = await request('POST', '/api/ncrs/' + encodeURIComponent(arcNcr) + '/restore', undefined, adminToken);
+    eq('restore a non-archived NCR -> 409', r.status, 409);
+
     // 28. competency gating (opt-in)
     r = await request('GET', '/api/admin/users', undefined, adminToken);
     ok('users expose qualifiedStages', Array.isArray(r.body) && r.body.every((u) => Array.isArray(u.qualifiedStages)), JSON.stringify(r.body && r.body[0]));
