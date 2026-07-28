@@ -367,6 +367,8 @@ function lvReset(key){ const lv=window._lv[key]; if(!lv)return; Object.assign(lv
 async function dashboard(){
   app().innerHTML=`<div class="empty">Loading…</div>`;
   let jobs; try{ jobs=await api("/api/jobs"); }catch(e){ app().innerHTML=`<div class="card"><div class="empty">Could not load jobs — ${esc(e.message)}</div></div>`; return; }
+  window._dashJobs=jobs; window._dashJobsArchived=null;
+  const canDeleteJobs=["Quality Manager","Administrator"].includes(ME.role);
   const cnt=s=>jobs.filter(j=>j.status===s).length;
   app().innerHTML=`
     <div class="stats">
@@ -384,19 +386,38 @@ async function dashboard(){
     rowHTML:jobRow,
     searchText:j=>(j.jobNo||'')+' '+(j.product||'')+' '+(j.customer||''), searchPlaceholder:'Job #, product, customer',
     filters:[
-      {id:'status',label:'Status',options:['New','In Progress','Released','Hold','Rejected'],match:(j,v)=>j.status===v},
+      {id:'status',label:'Status',options:['New','In Progress','Released','Hold','Rejected'].concat(canDeleteJobs?['Archived']:[]),
+        match:(j,v)=>v==='Archived'?true:j.status===v, onChange:dashStatusFilter},
       {id:'machine',label:'Machine',optionsFrom:j=>j.machine,optionLabel:m=>mlabel(m),match:(j,v)=>j.machine===v}
     ],
     actionsHTML:`<button class="btn ghost sm" onclick="exportCsv()">⤓ Export CSV</button>`,
     emptyText:'No jobs yet.', emptyFilterText:'No jobs match the filter.' });
+  if(window._lv.dashjobs.state.filters.status==='Archived') dashStatusFilter('Archived');
+}
+async function dashStatusFilter(v){
+  if(v==='Archived'){
+    if(!window._dashJobsArchived){
+      try{ window._dashJobsArchived=await api("/api/jobs?archived=1"); }
+      catch(e){ toast("Could not load archived jobs — "+e.message);
+        const lv=window._lv.dashjobs; delete lv.state.filters.status; listView(lv.cfg); return; }
+    }
+    lvData('dashjobs', window._dashJobsArchived);
+  } else {
+    lvData('dashjobs', window._dashJobs||[]);
+  }
 }
 function jobRow(j){
   const comp=Math.min(j.completed||0, STAGES.length); // stale caches may still report the old 4-stage count
   const segs=STAGES.map((s,i)=>`<div class="seg ${comp>=i+1?'done':(i===comp?'cur':'')}"></div>`).join("");
+  const status=j.archived?'<span class="pill grey">Archived</span>':statusPill(j.status);
+  const canDeleteJobs=ME&&["Quality Manager","Administrator"].includes(ME.role);
+  const actions=j.archived
+    ?`<button class="btn ghost sm" onclick="go('lookup',{jobNo:'${jsq(j.jobNo)}'})">View</button>${canDeleteJobs?` <button class="btn gold sm" onclick="restoreJob('${jsq(j.jobNo)}')">Restore</button>`:''}`
+    :`<button class="btn ghost sm" onclick="go('entry',{jobNo:'${jsq(j.jobNo)}'})">Open</button>`;
   return `<tr><td><b>${esc(j.jobNo)}</b></td><td>${esc(j.product||"")}<div style="font-size:12px;color:var(--muted)">${esc(j.customer||"")}</div></td>
     <td><span class="tag-machine">${esc(mlabel(j.machine))}</span></td>
     <td style="min-width:150px"><div class="progress">${segs}</div><div style="font-size:12px;color:var(--muted)">${comp} of ${STAGES.length}</div></td>
-    <td>${statusPill(j.status)}</td><td><button class="btn ghost sm" onclick="go('entry',{jobNo:'${jsq(j.jobNo)}'})">Open</button></td></tr>`;
+    <td>${status}</td><td>${actions}</td></tr>`;
 }
 async function exportCsv(){
   try{ const r=await fetch("/api/export/jobs.csv",{headers:hdrs()}); if(!r.ok) throw new Error("HTTP "+r.status);
@@ -503,8 +524,13 @@ function cloneJobModal(){ $("#modalRoot").innerHTML=`<div class="modal-bg"><div 
 async function doCloneJob(){ const jobNo=val("cl_jobNo").trim(); if(!jobNo){ toast("Enter a new Job #"); return; }
   try{ const job=await api("/api/jobs/"+encodeURIComponent(JOB.jobNo)+"/clone",{method:"POST",body:{jobNo}}); closeModal(); toast("Cloned to "+job.jobNo); go("entry",{jobNo:job.jobNo,stage:"stage1"}); }catch(e){ toast(e.message); }
 }
-async function deleteJob(no){ if(!confirm("Delete job "+no+" and all its stage data? This cannot be undone.")) return;
-  try{ await api("/api/jobs/"+encodeURIComponent(no),{method:"DELETE"}); toast("Job "+no+" deleted"); go("dashboard"); }catch(e){ toast(e.message); }
+/* "Delete" = archive: the job and its signed stage data are kept (lookup, exports and the audit
+   trail still see it) and it can be restored from the Dashboard's Status filter → Archived. */
+async function deleteJob(no){ if(!confirm("Delete job "+no+"?\n\nIt will be hidden from the lists and KPIs; its stage records are kept and it can be restored from the Dashboard's Status filter → Archived.")) return;
+  try{ await api("/api/jobs/"+encodeURIComponent(no),{method:"DELETE"}); toast("Job "+no+" archived"); go("dashboard"); }catch(e){ toast(e.message); }
+}
+async function restoreJob(no){
+  try{ await api("/api/jobs/"+encodeURIComponent(no)+"/restore",{method:"POST"}); toast("Job "+no+" restored"); dashboard(); }catch(e){ toast(e.message); }
 }
 
 function fT(id,l,v,ph){ return `<div class="field"><label>${l}</label><input id="${id}" value="${esc(v)}" placeholder="${esc(ph||'')}"></div>`; }

@@ -882,7 +882,10 @@ async function api(req, res, url) {
   if (seg[0]==='me') return send(res,200,{ user:pubUser(user) });
 
   if (seg[0]==='jobs' && method==='GET' && !seg[1]) {
-    return send(res,200, DB.jobs.map(j=>({ jobNo:j.jobNo, product:j.product, customer:j.customer, machine:j.machine, created:j.created, status:jobStatus(j), completed:completedStages(j) })));
+    // Archived jobs are hidden by default; ?archived=1 lists only them. GET by jobNo stays open
+    // so an archived record can still be looked up / printed.
+    const arch=url.searchParams.get('archived')==='1';
+    return send(res,200, DB.jobs.filter(j=>arch?j.archived:!j.archived).map(j=>({ jobNo:j.jobNo, product:j.product, customer:j.customer, machine:j.machine, created:j.created, status:jobStatus(j), completed:completedStages(j), archived:!!j.archived })));
   }
   if (seg[0]==='jobs' && method==='GET' && seg[1]) {
     const j = DB.jobs.find(x=>x.jobNo.toLowerCase()===decodeURIComponent(seg[1]).toLowerCase());
@@ -893,7 +896,8 @@ async function api(req, res, url) {
     const jobNo=String(b.jobNo||'').trim();
     if(!jobNo||!String(b.machine||'').trim()) return send(res,400,{error:'jobNo and machine required'});
     if(!machineExists(b.machine)) return send(res,400,{error:'Unknown machine — pick one from master data'});
-    if(DB.jobs.find(x=>x.jobNo.toLowerCase()===jobNo.toLowerCase())) return send(res,409,{error:'Job already exists'});
+    const dup=DB.jobs.find(x=>x.jobNo.toLowerCase()===jobNo.toLowerCase());
+    if(dup) return send(res,409,{error:dup.archived?'A job with that number exists in the archive — restore it instead':'Job already exists'});
     const job={ jobNo, machine:b.machine, productType:b.productType||'', itemCode:b.itemCode||'', customer:b.customer||'StarKist', product:b.product||'', description:b.description||'', created:new Date().toISOString().slice(0,10), stage1:{_done:false},stage3:{_done:false},stage4:{_done:false} };
     applyTemplateToJob(job); // pre-fill Stage 1 defaults from the best-matching press/product template
     DB.jobs.unshift(job); audit(user,'create-job',job.jobNo, job.templateApplied?('template: '+job.templateApplied):''); saveDB(); return send(res,200,job);
@@ -911,21 +915,37 @@ async function api(req, res, url) {
     if(!isManager(user)) return send(res,403,{error:'Only a Supervisor, Quality Manager or Administrator can edit job details'});
     const j = DB.jobs.find(x=>x.jobNo.toLowerCase()===decodeURIComponent(seg[1]).toLowerCase());
     if(!j) return send(res,404,{error:'Job not found'});
+    if(j.archived) return send(res,409,{error:'Job is archived — restore it first'});
     const b=await readBody(req);
     const jBefore={ customer:j.customer, product:j.product, description:j.description, productType:j.productType, itemCode:j.itemCode, machine:j.machine };
     ['customer','product','description','productType','itemCode'].forEach(k=>{ if(typeof b[k]==='string') j[k]=b[k]; });
     if(b.machine && machineExists(b.machine) && completedStages(j)===0) j.machine=b.machine;
     audit(user,'edit-job',{ recordType:'job', recordId:j.jobNo, jobNo:j.jobNo, changes:auditDiff(jBefore, j) }); saveDB(); return send(res,200,j);
   }
+  // DELETE = archive, mirroring the other registers: the job and all its signed stage data are
+  // kept (exports, lookup and the audit trail still see it) but it leaves the lists and KPIs.
   if (seg[0]==='jobs' && seg[1] && !seg[2] && method==='DELETE') {
     if(!canManageUsers(user)) return send(res,403,{error:'Only a Quality Manager or Administrator can delete jobs'});
-    const i = DB.jobs.findIndex(x=>x.jobNo.toLowerCase()===decodeURIComponent(seg[1]).toLowerCase());
-    if(i<0) return send(res,404,{error:'Job not found'});
-    const removed=DB.jobs.splice(i,1)[0]; audit(user,'delete-job',removed.jobNo); saveDB(); return send(res,200,{ ok:true });
+    const j = DB.jobs.find(x=>x.jobNo.toLowerCase()===decodeURIComponent(seg[1]).toLowerCase());
+    if(!j) return send(res,404,{error:'Job not found'});
+    if(j.archived) return send(res,409,{error:'Job is already archived'});
+    j.archived=true; j.archivedAt=new Date().toISOString(); j.archivedBy=user.id;
+    audit(user,'job-archive',{ recordType:'job', recordId:j.jobNo, jobNo:j.jobNo, detail:j.jobNo, changes:[{field:'archived', from:'', to:'true'}] });
+    saveDB(); return send(res,200,{ ok:true });
+  }
+  if (seg[0]==='jobs' && seg[1] && seg[2]==='restore' && method==='POST') {
+    if(!canManageUsers(user)) return send(res,403,{error:'Only a Quality Manager or Administrator can restore jobs'});
+    const j = DB.jobs.find(x=>x.jobNo.toLowerCase()===decodeURIComponent(seg[1]).toLowerCase());
+    if(!j) return send(res,404,{error:'Job not found'});
+    if(!j.archived) return send(res,409,{error:'Job is not archived'});
+    delete j.archived; delete j.archivedAt; delete j.archivedBy;
+    audit(user,'job-restore',{ recordType:'job', recordId:j.jobNo, jobNo:j.jobNo, detail:j.jobNo, changes:[{field:'archived', from:'true', to:''}] });
+    saveDB(); return send(res,200,{ ok:true });
   }
   if (seg[0]==='jobs' && seg[2]==='stage' && method==='PUT') {
     const j = DB.jobs.find(x=>x.jobNo.toLowerCase()===decodeURIComponent(seg[1]).toLowerCase());
     if(!j) return send(res,404,{error:'Job not found'});
+    if(j.archived) return send(res,409,{error:'Job is archived — restore it first'});
     const n = seg[3]; const b = await readBody(req);
     if(!['1','2','3','4'].includes(n)) return send(res,400,{error:'Invalid stage — must be 1, 3 or 4'});
     // Stage 2 (Reel Inspection) is no longer part of the QA flow, but remains a legacy write sink:
@@ -959,13 +979,17 @@ async function api(req, res, url) {
   if (seg[0]==='jobs' && seg[2]==='hold' && method==='POST') {
     if(!isManager(user)) return send(res,403,{error:'Only a Supervisor, Quality Manager or Administrator can place a job on hold'});
     const j = DB.jobs.find(x=>x.jobNo.toLowerCase()===decodeURIComponent(seg[1]).toLowerCase());
-    if(!j) return send(res,404,{error:'Job not found'}); const b=await readBody(req);
+    if(!j) return send(res,404,{error:'Job not found'});
+    if(j.archived) return send(res,409,{error:'Job is archived — restore it first'});
+    const b=await readBody(req);
     j.statusOverride='Hold'; audit(user,'hold',j.jobNo,b.reason||''); alertAll('Job '+j.jobNo+' placed on HOLD', (b.reason||'')+' by '+user.name); fireEvent('job.hold',{ jobNo:j.jobNo, reason:b.reason||'', by:user.id }); saveDB(); return send(res,200,j);
   }
   if (seg[0]==='jobs' && seg[2]==='release' && method==='POST') {
     if(!isManager(user)) return send(res,403,{error:'Only a Supervisor, Quality Manager or Administrator can clear a hold'});
     const j = DB.jobs.find(x=>x.jobNo.toLowerCase()===decodeURIComponent(seg[1]).toLowerCase());
-    if(!j) return send(res,404,{error:'Job not found'}); const b=await readBody(req);
+    if(!j) return send(res,404,{error:'Job not found'});
+    if(j.archived) return send(res,409,{error:'Job is archived — restore it first'});
+    const b=await readBody(req);
     delete j.statusOverride; audit(user,'release',j.jobNo,b.reason||'hold cleared'); if(jobStatus(j)==='Released') fireEvent('job.released',{ jobNo:j.jobNo, product:j.product }); saveDB(); return send(res,200,j);
   }
 
@@ -1531,7 +1555,7 @@ function analytics(opts){
   opts=opts||{}; const from=opts.from||'', to=opts.to||'', shift=String(opts.shift||'');
   const inRange=j=>{ const d=j.created||''; if(from && d<from) return false; if(to && d>to) return false; return true; };
   const inShift=j=>{ if(!shift) return true; return [j.stage2&&j.stage2.shift, j.stage4&&j.stage4.shift].some(s=>String(s||'').toLowerCase()===shift.toLowerCase()); };
-  const jobs=DB.jobs.filter(j=>inRange(j)&&inShift(j));
+  const jobs=DB.jobs.filter(j=>!j.archived&&inRange(j)&&inShift(j));
   const defects={}, wasteByMachine={}, downtime={Material:0,Winding:0,'Reel Damage':0,Mechanical:0,Electrical:0}, trendMap={};
   let released=0, total=jobs.length, rejectedJobs=0;
   jobs.forEach(j=>{
@@ -1563,7 +1587,7 @@ function exec(){
   const equip=(DB.equipment||[]).filter(e=>e.active!==false && !e.archived).map(equipView);
   const overdueCal=equip.filter(e=>e.calStatus==='Overdue').map(e=>({ id:e.id, name:e.name, nextDue:e.nextDue, days:e.daysToDue }));
   const dueSoonCal=equip.filter(e=>e.calStatus==='Due soon').map(e=>({ id:e.id, name:e.name, nextDue:e.nextDue, days:e.daysToDue }));
-  const holds=DB.jobs.filter(j=>{ const s=jobStatus(j); return s==='Hold'||s==='Rejected'; }).map(j=>({ jobNo:j.jobNo, status:jobStatus(j), product:j.product }));
+  const holds=DB.jobs.filter(j=>{ if(j.archived)return false; const s=jobStatus(j); return s==='Hold'||s==='Rejected'; }).map(j=>({ jobNo:j.jobNo, status:jobStatus(j), product:j.product }));
   const ragMin=(v,target)=> v>=target?'green':(v>=target*0.9?'amber':'red');
   const ragMax=(v,target)=>{ const band=Math.max(1,Math.ceil(target*0.5)); return v<=target?'green':(v<=target+band?'amber':'red'); };
   const kpis=[
@@ -1573,7 +1597,7 @@ function exec(){
     { key:'holdReject', label:'Hold / reject jobs', value:a.kpis.rejectedJobs, unit:'', target:t.holdRejectMax, dir:'max', rag:ragMax(a.kpis.rejectedJobs,t.holdRejectMax) }
   ];
   return { generated:new Date().toISOString(), org:CFG.orgName, targets:t, kpis,
-    summary:{ totalJobs:a.kpis.total, released:a.kpis.released, inProgress:DB.jobs.filter(j=>jobStatus(j)==='In Progress').length, overdueCapas:overdueCapas.length, dueSoonCal:dueSoonCal.length },
+    summary:{ totalJobs:a.kpis.total, released:a.kpis.released, inProgress:DB.jobs.filter(j=>!j.archived&&jobStatus(j)==='In Progress').length, overdueCapas:overdueCapas.length, dueSoonCal:dueSoonCal.length },
     lists:{ overdueCapas, overdueCal, dueSoonCal, holds } };
 }
 
@@ -1610,7 +1634,7 @@ function spc(param){
                  values:()=>[] } };
   const def=defs[param]||defs.cof;
   const points=[];
-  DB.jobs.forEach(j=>{ const s1=j.stage1||{}; (def.values(s1)||[]).forEach(raw=>{ const v=parseFloat(raw); if(!isNaN(v)) points.push({ jobNo:j.jobNo, date:s1.date||j.created, value:v }); }); });
+  DB.jobs.forEach(j=>{ if(j.archived)return; const s1=j.stage1||{}; (def.values(s1)||[]).forEach(raw=>{ const v=parseFloat(raw); if(!isNaN(v)) points.push({ jobNo:j.jobNo, date:s1.date||j.created, value:v }); }); });
   points.sort((a,b)=> (a.date<b.date?-1:1));
   const vals=points.map(p=>p.value); const n=vals.length;
   const mean=n?vals.reduce((a,b)=>a+b,0)/n:0;
@@ -1628,7 +1652,7 @@ function spc(param){
    so totals reconcile and no supplier is silently omitted (previously all of it went to the first). */
 function suppliers(){
   const map={};
-  DB.jobs.forEach(j=>{ const s1=j.stage1||{}; const mats=s1.materials||[];
+  DB.jobs.forEach(j=>{ if(j.archived)return; const s1=j.stage1||{}; const mats=s1.materials||[];
     let sups=[...new Set(mats.map(m=>String((m&&m.supplier)||'').trim()).filter(Boolean))];
     if(!sups.length){ sups=[String(s1.supplier||'').trim() || '(unspecified)']; }
     const st=jobStatus(j);
@@ -1730,8 +1754,8 @@ function checkChecklistReminders(){
 /* ---------- manager digest (emailed / Teams) ---------- */
 function buildDigest(){
   const a=analytics(); const today=todayYmd();
-  const holds=DB.jobs.filter(j=>{ const s=jobStatus(j); return s==='Hold'||s==='Rejected'; }).map(j=>({ jobNo:j.jobNo, status:jobStatus(j), product:j.product }));
-  const inProgress=DB.jobs.filter(j=>jobStatus(j)==='In Progress').length;
+  const holds=DB.jobs.filter(j=>{ if(j.archived)return false; const s=jobStatus(j); return s==='Hold'||s==='Rejected'; }).map(j=>({ jobNo:j.jobNo, status:jobStatus(j), product:j.product }));
+  const inProgress=DB.jobs.filter(j=>!j.archived&&jobStatus(j)==='In Progress').length;
   const topDefects=Object.entries(a.defects).sort((x,y)=>y[1]-x[1]).slice(0,5).map(([k,v])=>({ defect:k, kg:Math.round(v*100)/100 }));
   const overdueCapas=(DB.capas||[]).filter(c=>!c.archived&&c.status!=='Closed'&&c.dueDate&&c.dueDate<today).map(c=>({ id:c.id, title:c.title, dueDate:c.dueDate }));
   const overdueCal=(DB.equipment||[]).filter(e=>e.active!==false && !e.archived).map(equipView).filter(e=>e.calStatus==='Overdue').map(e=>({ id:e.id, name:e.name, nextDue:e.nextDue }));
