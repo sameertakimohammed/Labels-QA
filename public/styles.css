@@ -21,7 +21,7 @@ header.topbar .right{margin-left:auto;display:flex;align-items:center;gap:10px}
 .qbadge:active{transform:translateY(1px)}
 main{max-width:1100px;margin:0 auto;padding:20px}
 /* topbar + sidebar layout */
-header.topbar{position:sticky;top:0;z-index:30;display:flex;align-items:center;gap:12px;padding:10px 16px;background:linear-gradient(120deg,var(--navy),var(--navy2));color:#fff}
+header.topbar{position:sticky;top:0;z-index:30;display:flex;flex-wrap:wrap;align-items:center;gap:12px;padding:10px 16px;background:linear-gradient(120deg,var(--navy),var(--navy2));color:#fff}
 .hamburger{display:none;background:transparent;border:0;color:#fff;font-size:24px;line-height:1;cursor:pointer;padding:4px 10px;border-radius:8px}
 .hamburger:active{background:rgba(255,255,255,.12)}
 .layout{display:flex;align-items:flex-start}
@@ -105,6 +105,24 @@ td select{min-width:110px}
 canvas.sig{border:2px dashed var(--line);border-radius:12px;width:100%;height:170px;touch-action:none;background:#fff}
 .thumbs{display:flex;gap:10px;flex-wrap:wrap;margin-top:10px}.thumbs img{width:84px;height:84px;object-fit:cover;border-radius:10px;border:1px solid var(--line)}
 .countdown{font-weight:800}
+/* list views (scoped under .lv so editable stage-form tables keep their plain styling) */
+.lv .table-wrap{overflow-x:auto}
+.lv-toolbar{display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap;margin:4px 0 14px}
+.lv-toolbar .field{flex:1 1 150px;max-width:240px;margin:0}
+.lv-toolbar .field.lv-qf{flex:2 1 200px;max-width:330px}
+.lv-toolbar input,.lv-toolbar select{min-height:44px;padding:8px 12px;font-size:15px}
+.lv-toolbar .btn{margin-bottom:1px}
+.lv-count{margin-left:auto;color:var(--muted);font-size:13px;white-space:nowrap;padding-bottom:13px}
+.lv table tbody tr:nth-child(even){background:#f8fafc}
+.lv table tbody tr:hover{background:#eef4fb}
+.lv th.sortable{cursor:pointer;user-select:none;white-space:nowrap}
+.lv th.sortable .dir{opacity:.4;font-size:10px;margin-left:4px}
+.lv th.sortable.on{color:var(--navy)}
+.lv th.sortable.on .dir{opacity:1}
+.lv-off{display:none}
+.lv-pager{display:flex;gap:10px;align-items:center;justify-content:flex-end;flex-wrap:wrap;margin-top:12px}
+.lv-pager .pg{color:var(--muted);font-size:13.5px}
+.lv-pager select{min-height:40px;width:auto;padding:6px 10px;font-size:14px}
 @media print{
   body{background:#fff;font-size:12px}
   header.topbar,.sidebar,.scrim,.row-actions,.no-print,.toast,#login{display:none!important}
@@ -115,6 +133,8 @@ canvas.sig{border:2px dashed var(--line);border-radius:12px;width:100%;height:17
   .summary-stage .head{background:#eee!important}
   th{background:#eee!important}
   table{font-size:11px}
+  .lv-off{display:table-row-group} /* print every filtered row, not just the current page */
+  .lv table tbody tr:hover{background:none}
   .pill{border:1px solid #999}
   h2,h3,h4{break-after:avoid;page-break-after:avoid}
   .thumbs img{max-width:120px}

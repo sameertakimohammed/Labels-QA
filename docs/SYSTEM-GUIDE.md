@@ -255,8 +255,9 @@ All endpoints are under `/api`. Auth: `x-token: <session>` (login) or `x-api-key
 | `POST /api/upload` | Photo/signature upload | authed |
 | `GET/POST/PUT /api/capas[/:id]` | CAPA list/create/update | view: authed · write: Supervisor |
 | `GET/POST/PUT /api/ncrs[/:id]` · `POST /api/ncrs/:id/capa` | NCR + promote | view: authed · write: Supervisor |
-| `GET/POST/PUT /api/equipment[/:id]` · `POST /api/equipment/:id/calibrate` | Equipment + calibrate | view: authed · write: Supervisor |
-| `GET /api/equipment/:id/history` · `GET /api/equipment/calibration-history.csv` | Calibration history + CSV extract | authed |
+| `GET/POST/PUT /api/equipment[/:id]` · `POST /api/equipment/:id/calibrate` | Equipment + calibrate (`GET ?archived=1` lists archived) | view: authed · write: Supervisor |
+| `DELETE /api/equipment/:id` · `POST /api/equipment/:id/restore` | Archive (hide, keep history) · restore | Supervisor |
+| `GET /api/equipment/:id/history` · `GET /api/equipment/calibration-history.csv` | Calibration history + CSV extract (archived items included) | authed |
 | `GET /api/checklist-defs` · `POST/PUT/DELETE /api/checklist-defs[/:id]` | Checklist form templates | view: authed · write: Supervisor |
 | `GET/POST /api/checklists[/:id]` · `PUT /api/checklists/:id` · `POST /api/checklists/:id/verify` | Checklist submissions · verify (2nd person) | authed · verify: Supervisor |
 | `GET /api/checklists/due` | Per-form due status (daily before-noon / monthly month-end) | authed |

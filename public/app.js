@@ -271,13 +271,103 @@ function render(){ const v=CUR.view;
   else if(v==="exec")execDashboard(); else if(v==="capa")capaPage(); else if(v==="ncr")ncrPage(); else if(v==="checklists")checklistsPage(); else if(v==="equip")equipmentPage(); else if(v==="spc")spcPage(); else if(v==="reports")reports(); else if(v==="suppliers")suppliersPage(); else if(v==="team")team(); else if(v==="audit")auditTrail(); else if(v==="integrations")integrationsPage(); else if(v==="templates")templatesPage(); else if(v==="settings")settings(); else if(v==="account")myAccount();
   else dashboard(); }
 
+/* ---------- generic list view: toolbar (search/filters) + sortable table + 10-row pager ----------
+   listView(cfg) renders into #<cfg.host>; per-view UI state lives in window._lv[key] so it survives
+   SPA re-renders (e.g. the flushQueue() re-render). cfg:
+     { key, host, rows, columns:[{label, sortVal?, thClass?}], rowHTML(item),
+       filters:[{id, label, type?:'select'|'date', options?|optionsFrom?, optionLabel?, match(item,v), onChange?}],
+       searchText(item)?, searchPlaceholder?, actionsHTML?, pageSize?, emptyText?, emptyFilterText?, toolbar? }
+   Keys, hosts and filter ids must be hardcoded literals (they are embedded in inline handlers);
+   every data-derived string rendered here goes through esc(). */
+window._lv = window._lv || {};
+function listView(cfg){
+  const prev=window._lv[cfg.key] && window._lv[cfg.key].state;
+  const state=Object.assign({q:"",filters:{},sort:-1,dir:1,page:0,size:cfg.pageSize||10}, prev||{});
+  window._lv[cfg.key]={cfg,state};
+  lvClean(cfg.key);
+  const host=document.getElementById(cfg.host||("lv_"+cfg.key)); if(!host)return;
+  host.innerHTML=`<div class="lv">${cfg.toolbar===false?'':lvToolbarHTML(cfg,state)}
+    <div class="table-wrap"><table><thead id="lvhead_${cfg.key}"></thead><tbody class="lv-off" id="lvpre_${cfg.key}"></tbody><tbody id="lvbody_${cfg.key}"></tbody><tbody class="lv-off" id="lvpost_${cfg.key}"></tbody></table></div>
+    <div class="empty hidden" id="lvempty_${cfg.key}" style="padding:18px"></div>
+    <div class="lv-pager no-print" id="lvpager_${cfg.key}"></div></div>`;
+  lvBody(cfg.key);
+}
+/* swap the data after a refetch without rebuilding the toolbar (keeps focus + filter DOM) */
+function lvData(key, rows){ const lv=window._lv[key]; if(!lv)return; lv.cfg.rows=rows; lvClean(key); lvBody(key); }
+function lvClean(key){ const {cfg,state}=window._lv[key];
+  (cfg.filters||[]).forEach(f=>{ const v=state.filters[f.id]; if(!v||f.type==='date')return;
+    if(!lvFilterOptions(cfg,f).includes(v)) delete state.filters[f.id]; });
+}
+function lvFilterOptions(cfg,f){ return f.options?f.options.slice():(f.optionsFrom?[...new Set((cfg.rows||[]).map(f.optionsFrom).filter(Boolean))].sort():[]); }
+function lvToolbarHTML(cfg,state){
+  const k=cfg.key;
+  const search=cfg.searchText?`<div class="field lv-qf"><label>Search</label><input value="${esc(state.q)}" placeholder="${esc(cfg.searchPlaceholder||'Search')}" oninput="lvQ('${k}',this.value)"></div>`:'';
+  const filters=(cfg.filters||[]).map(f=>{
+    if(f.type==='date') return `<div class="field"><label>${esc(f.label)}</label><input type="date" value="${esc(state.filters[f.id]||'')}" onchange="lvF('${k}','${f.id}',this.value)"></div>`;
+    const lab=f.optionLabel||(v=>v);
+    return `<div class="field"><label>${esc(f.label)}</label><select onchange="lvF('${k}','${f.id}',this.value)"><option value="">${esc(f.allLabel||'All')}</option>${lvFilterOptions(cfg,f).map(o=>`<option value="${esc(o)}" ${state.filters[f.id]===o?'selected':''}>${esc(lab(o))}</option>`).join("")}</select></div>`;
+  }).join("");
+  return `<div class="lv-toolbar no-print">${search}${filters}<button class="btn ghost sm lv-reset" onclick="lvReset('${k}')">Reset</button>${cfg.actionsHTML||''}<span class="lv-count" id="lvcount_${k}"></span></div>`;
+}
+/* filtered + sorted rows (the "current view" — the pager slices it, print shows all of it) */
+function lvRows(key){
+  const {cfg,state}=window._lv[key];
+  let list=(cfg.rows||[]).slice();
+  const q=(state.q||"").toLowerCase().trim();
+  if(q&&cfg.searchText) list=list.filter(it=>String(cfg.searchText(it)||"").toLowerCase().includes(q));
+  (cfg.filters||[]).forEach(f=>{ const v=state.filters[f.id]; if(v&&f.match) list=list.filter(it=>f.match(it,v)); });
+  const col=(cfg.columns||[])[state.sort];
+  if(col&&col.sortVal){ const d=state.dir; list.sort((a,b)=>lvCmp(col.sortVal(a),col.sortVal(b),d)); }
+  return list;
+}
+function lvCmp(a,b,dir){
+  const an=(a==null||a===""), bn=(b==null||b==="");
+  if(an&&bn)return 0; if(an)return 1; if(bn)return -1;   // empties last regardless of direction
+  const na=Number(a), nb=Number(b);
+  if(Number.isFinite(na)&&Number.isFinite(nb)) return (na-nb)*dir;
+  return String(a).localeCompare(String(b))*dir;
+}
+function lvBody(key){
+  const lv=window._lv[key]; if(!lv)return; const {cfg,state}=lv;
+  const list=lvRows(key);
+  const size=state.size==='all'?Math.max(list.length,1):(Number(state.size)||10);
+  const pages=Math.max(1,Math.ceil(list.length/size));
+  if(state.page>=pages)state.page=pages-1; if(state.page<0)state.page=0;
+  const start=state.page*size;
+  const pre=$("#lvpre_"+key); if(!pre)return;
+  pre.innerHTML=list.slice(0,start).map(cfg.rowHTML).join("");
+  $("#lvbody_"+key).innerHTML=list.slice(start,start+size).map(cfg.rowHTML).join("");
+  $("#lvpost_"+key).innerHTML=list.slice(start+size).map(cfg.rowHTML).join("");
+  $("#lvhead_"+key).innerHTML=`<tr>${(cfg.columns||[]).map((c,i)=>{
+    const sortable=!!c.sortVal, on=state.sort===i;
+    return `<th class="${c.thClass||''}${sortable?' sortable':''}${on?' on':''}" ${sortable?`onclick="lvSort('${key}',${i})"`:''}>${esc(c.label||'')}${sortable?`<span class="dir">${on?(state.dir>0?'▲':'▼'):'↕'}</span>`:''}</th>`;
+  }).join("")}</tr>`;
+  const em=$("#lvempty_"+key);
+  em.textContent=(cfg.rows||[]).length?(cfg.emptyFilterText||'No rows match the filter.'):(cfg.emptyText||'Nothing here yet.');
+  em.classList.toggle("hidden",!!list.length);
+  const filtered=(cfg.rows||[]).length!==list.length;
+  const pager=$("#lvpager_"+key);
+  pager.innerHTML=(list.length>10||state.page>0||String(state.size)!=='10')?`
+    <span class="pg">${list.length} item${list.length===1?'':'s'}${filtered?' (of '+(cfg.rows||[]).length+')':''} · Page ${state.page+1} of ${pages}</span>
+    <button class="btn ghost sm" ${state.page<=0?'disabled':''} onclick="lvPage('${key}',${state.page-1})">‹ Prev</button>
+    <button class="btn ghost sm" ${state.page>=pages-1?'disabled':''} onclick="lvPage('${key}',${state.page+1})">Next ›</button>
+    <select onchange="lvSize('${key}',this.value)">${[10,25,50,'all'].map(s=>`<option value="${s}" ${String(state.size)===String(s)?'selected':''}>${s==='all'?'All':s+' / page'}</option>`).join("")}</select>`:'';
+  const cnt=$("#lvcount_"+key);
+  if(cnt)cnt.textContent=list.length+(list.length===1?' item':' items')+(filtered?' of '+(cfg.rows||[]).length:'');
+}
+function lvQ(key,v){ const lv=window._lv[key]; if(!lv)return; lv.state.q=v; lv.state.page=0; lvBody(key); }
+function lvF(key,fid,v){ const lv=window._lv[key]; if(!lv)return; if(v)lv.state.filters[fid]=v; else delete lv.state.filters[fid]; lv.state.page=0;
+  lvBody(key); const f=(lv.cfg.filters||[]).find(x=>x.id===fid); if(f&&f.onChange)f.onChange(v); }
+function lvSort(key,i){ const lv=window._lv[key]; if(!lv)return; const s=lv.state; if(s.sort===i)s.dir=-s.dir; else{s.sort=i;s.dir=1;} lvBody(key); }
+function lvPage(key,p){ const lv=window._lv[key]; if(!lv)return; lv.state.page=p; lvBody(key); }
+function lvSize(key,v){ const lv=window._lv[key]; if(!lv)return; lv.state.size=(v==='all')?'all':(Number(v)||10); lv.state.page=0; lvBody(key); }
+function lvReset(key){ const lv=window._lv[key]; if(!lv)return; Object.assign(lv.state,{q:"",filters:{},sort:-1,dir:1,page:0,size:lv.cfg.pageSize||10}); listView(lv.cfg); }
+
 /* ---------- dashboard ---------- */
 async function dashboard(){
   app().innerHTML=`<div class="empty">Loading…</div>`;
   let jobs; try{ jobs=await api("/api/jobs"); }catch(e){ app().innerHTML=`<div class="card"><div class="empty">Could not load jobs — ${esc(e.message)}</div></div>`; return; }
-  window._dashJobs=jobs;
   const cnt=s=>jobs.filter(j=>j.status===s).length;
-  const machineOpts=[...new Set(jobs.map(j=>j.machine))].map(m=>`<option value="${esc(m)}">${esc(mlabel(m))}</option>`).join("");
   app().innerHTML=`
     <div class="stats">
       <div class="stat"><div class="n">${jobs.length}</div><div class="l">Total Jobs</div></div>
@@ -286,15 +376,19 @@ async function dashboard(){
       <div class="stat"><div class="n">${cnt('Hold')+cnt('Rejected')}</div><div class="l">Hold / Reject</div></div>
     </div>
     <div class="card"><h2>Active &amp; Recent Jobs</h2><p class="sub">Each Starkist job tracked through all three stages by one Job #.</p>
-    <div class="grid g4 no-print" style="margin-bottom:14px">
-      <div class="field"><label>Search</label><input id="dq" placeholder="Job #, product, customer" oninput="renderJobRows()"></div>
-      <div class="field"><label>Status</label><select id="dstatus" onchange="renderJobRows()"><option value="">All statuses</option><option>New</option><option>In Progress</option><option>Released</option><option>Hold</option><option>Rejected</option></select></div>
-      <div class="field"><label>Machine</label><select id="dmachine" onchange="renderJobRows()"><option value="">All machines</option>${machineOpts}</select></div>
-      <div class="field"><label>Export</label><button class="btn ghost" onclick="exportCsv()">⤓ Export CSV</button></div>
-    </div>
-    ${jobs.length?`<div style="overflow-x:auto"><table><thead><tr><th>Job #</th><th>Product</th><th>Machine</th><th>Progress</th><th>Status</th><th></th></tr></thead><tbody id="jobtbody"></tbody></table></div><div class="empty hidden" id="jobempty" style="padding:18px">No jobs match the filter.</div>`:`<div class="empty">No jobs yet.</div>`}
+    <div id="lv_dashjobs"></div>
     <div class="row-actions"><button class="btn gold" onclick="go('new')">+ New Job</button><button class="btn ghost" onclick="go('lookup')">Look up a Job #</button></div></div>`;
-  if(jobs.length) renderJobRows();
+  listView({ key:'dashjobs', rows:jobs,
+    columns:[ {label:'Job #',sortVal:j=>j.jobNo}, {label:'Product',sortVal:j=>j.product||''}, {label:'Machine',sortVal:j=>mlabel(j.machine)},
+      {label:'Progress',sortVal:j=>j.completed||0}, {label:'Status',sortVal:j=>j.status}, {label:''} ],
+    rowHTML:jobRow,
+    searchText:j=>(j.jobNo||'')+' '+(j.product||'')+' '+(j.customer||''), searchPlaceholder:'Job #, product, customer',
+    filters:[
+      {id:'status',label:'Status',options:['New','In Progress','Released','Hold','Rejected'],match:(j,v)=>j.status===v},
+      {id:'machine',label:'Machine',optionsFrom:j=>j.machine,optionLabel:m=>mlabel(m),match:(j,v)=>j.machine===v}
+    ],
+    actionsHTML:`<button class="btn ghost sm" onclick="exportCsv()">⤓ Export CSV</button>`,
+    emptyText:'No jobs yet.', emptyFilterText:'No jobs match the filter.' });
 }
 function jobRow(j){
   const comp=Math.min(j.completed||0, STAGES.length); // stale caches may still report the old 4-stage count
@@ -303,15 +397,6 @@ function jobRow(j){
     <td><span class="tag-machine">${esc(mlabel(j.machine))}</span></td>
     <td style="min-width:150px"><div class="progress">${segs}</div><div style="font-size:12px;color:var(--muted)">${comp} of ${STAGES.length}</div></td>
     <td>${statusPill(j.status)}</td><td><button class="btn ghost sm" onclick="go('entry',{jobNo:'${jsq(j.jobNo)}'})">Open</button></td></tr>`;
-}
-function renderJobRows(){
-  const q=(val("dq")||"").toLowerCase().trim(), st=val("dstatus"), mc=val("dmachine");
-  let list=(window._dashJobs||[]);
-  if(q) list=list.filter(j=>((j.jobNo||"")+" "+(j.product||"")+" "+(j.customer||"")).toLowerCase().includes(q));
-  if(st) list=list.filter(j=>j.status===st);
-  if(mc) list=list.filter(j=>j.machine===mc);
-  const tb=$("#jobtbody"); if(!tb)return; tb.innerHTML=list.map(jobRow).join("");
-  const e=$("#jobempty"); if(e)e.classList.toggle("hidden",!!list.length);
 }
 async function exportCsv(){
   try{ const r=await fetch("/api/export/jobs.csv",{headers:hdrs()}); if(!r.ok) throw new Error("HTTP "+r.status);
@@ -372,7 +457,16 @@ async function createJob(){
 let JOB=null;
 async function entry(){
   if(!CUR.jobNo){ const jobs=await api("/api/jobs");
-    app().innerHTML=`<div class="card"><h2>Data Entry</h2><p class="sub">Choose a job.</p>${jobs.length?`<div class="field" style="max-width:460px"><label>Select Job #</label><select onchange="if(this.value)go('entry',{jobNo:this.value})"><option value="">— Select —</option>${jobs.map(j=>`<option value="${esc(j.jobNo)}">${esc(j.jobNo)} — ${esc(j.product||'')}</option>`).join("")}</select></div>`:`<div class="empty">No jobs. <button class="btn gold" onclick="go('new')">+ New Job</button></div>`}</div>`; return; }
+    app().innerHTML=`<div class="card"><h2>Data Entry</h2><p class="sub">Choose a job to record inspection data against.</p><div id="lv_entryjobs"></div>
+      <div class="row-actions"><button class="btn gold" onclick="go('new')">+ New Job</button></div></div>`;
+    listView({ key:'entryjobs', rows:jobs,
+      columns:[ {label:'Job #',sortVal:j=>j.jobNo}, {label:'Product',sortVal:j=>j.product||''}, {label:'Machine',sortVal:j=>mlabel(j.machine)},
+        {label:'Progress',sortVal:j=>j.completed||0}, {label:'Status',sortVal:j=>j.status}, {label:''} ],
+      rowHTML:jobRow,
+      searchText:j=>(j.jobNo||'')+' '+(j.product||'')+' '+(j.customer||''), searchPlaceholder:'Job #, product, customer',
+      filters:[ {id:'status',label:'Status',options:['New','In Progress','Released','Hold','Rejected'],match:(j,v)=>j.status===v} ],
+      emptyText:'No jobs yet — create one to start recording.', emptyFilterText:'No jobs match the filter.' });
+    return; }
   JOB=await api("/api/jobs/"+encodeURIComponent(CUR.jobNo));
   if(!STAGES.some(s=>s.key===CUR.stage)) CUR.stage="stage1"; // e.g. stale nav to the removed stage2
   const done=n=>JOB["stage"+n]&&JOB["stage"+n]._done; const c=FLOW.filter(done).length;
@@ -592,12 +686,22 @@ function closeModal(){ if(window._scanInt)clearInterval(window._scanInt); if(win
 /* lookup */
 async function lookup(){
   const pre=CUR.jobNo||"";
-  app().innerHTML=`<div class="card no-print"><h2>Job # Lookup</h2><p class="sub">Type or scan a Job # for the full cross-stage record.</p><div style="display:flex;gap:10px;max-width:560px"><input id="lk" placeholder="Job #" value="${esc(pre)}" style="font-size:19px"><button class="btn ghost" onclick="scanBarcode('lk')">📷</button><button class="btn gold" onclick="doLook()">Search</button></div></div><div id="lkr"></div>`;
+  app().innerHTML=`<div class="card no-print"><h2>Job # Lookup</h2><p class="sub">Type or scan a Job # for the full cross-stage record, or pick from the list.</p><div style="display:flex;gap:10px;max-width:560px"><input id="lk" placeholder="Job #" value="${esc(pre)}" style="font-size:19px"><button class="btn ghost" onclick="scanBarcode('lk')">📷</button><button class="btn gold" onclick="doLook()">Search</button></div></div><div id="lkr"></div><div class="card no-print" id="lkbrowse"><h3 style="margin:0 0 8px">Browse jobs</h3><div id="lv_lookupjobs"></div></div>`;
   const lk=$("#lk"); if(lk){ lk.onkeydown=(e)=>{ if(e.key==="Enter"){ e.preventDefault(); doLook(); } }; if(!pre) lk.focus(); }
+  let jobs=[]; try{ jobs=await api("/api/jobs"); }catch(e){ jobs=[]; }
+  listView({ key:'lookupjobs', rows:jobs,
+    columns:[ {label:'Job #',sortVal:j=>j.jobNo}, {label:'Product',sortVal:j=>j.product||''}, {label:'Machine',sortVal:j=>mlabel(j.machine)},
+      {label:'Created',sortVal:j=>j.created||''}, {label:'Status',sortVal:j=>j.status}, {label:''} ],
+    rowHTML:j=>`<tr><td><b>${esc(j.jobNo)}</b></td><td>${esc(j.product||'')}<div style="font-size:12px;color:var(--muted)">${esc(j.customer||'')}</div></td><td><span class="tag-machine">${esc(mlabel(j.machine))}</span></td><td>${esc(j.created||'—')}</td><td>${statusPill(j.status)}</td><td><button class="btn ghost sm" onclick="go('lookup',{jobNo:'${jsq(j.jobNo)}'})">View</button></td></tr>`,
+    searchText:j=>(j.jobNo||'')+' '+(j.product||'')+' '+(j.customer||''), searchPlaceholder:'Job #, product, customer',
+    filters:[ {id:'status',label:'Status',options:['New','In Progress','Released','Hold','Rejected'],match:(j,v)=>j.status===v} ],
+    emptyText:'No jobs yet.', emptyFilterText:'No jobs match the filter.' });
   if(pre)doLook();
 }
-async function doLook(){ const no=$("#lk").value.trim(); const host=$("#lkr"); if(!no){host.innerHTML="";return;}
-  let j; try{ j=await api("/api/jobs/"+encodeURIComponent(no)); }catch(e){ host.innerHTML=`<div class="card"><div class="empty">No job found for <b>${esc(no)}</b>.</div></div>`; return; }
+async function doLook(){ const no=$("#lk").value.trim(); const host=$("#lkr"); const br=$("#lkbrowse");
+  if(!no){host.innerHTML=""; if(br)br.classList.remove("hidden"); return;}
+  let j; try{ j=await api("/api/jobs/"+encodeURIComponent(no)); }catch(e){ host.innerHTML=`<div class="card"><div class="empty">No job found for <b>${esc(no)}</b>.</div></div>`; if(br)br.classList.remove("hidden"); return; }
+  if(br)br.classList.add("hidden"); // a loaded record replaces the browse list
   const done=n=>j["stage"+n]&&j["stage"+n]._done; const c=FLOW.filter(done).length;
   const kv=(l,v)=>`<div><span>${l}</span><b>${esc(v||"—")}</b></div>`;
   const kvb=ps=>`<div class="kv">${ps.map(p=>kv(p[0],p[1])).join("")}</div>`;
@@ -665,24 +769,25 @@ async function capaPage(){
   app().innerHTML=`<div class="card"><div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
       <div><h2 style="margin:0">CAPA — Corrective &amp; Preventive Actions</h2><p class="sub" style="margin:4px 0 0">Track and close quality events. ${open} open of ${capas.length}.</p></div>
       <div style="margin-left:auto" class="no-print">${canManage?`<button class="btn gold" onclick="capaModal()">+ Raise CAPA</button>`:''}</div></div>
-    <div class="grid g3 no-print" style="margin:4px 0 14px">
-      <div class="field"><label>Status</label><select id="cq_status" onchange="renderCapaRows()"><option value="">All</option><option>Open</option><option>In Progress</option><option>Closed</option></select></div>
-      <div class="field"><label>Search</label><input id="cq_q" placeholder="Job #, title, owner" oninput="renderCapaRows()"></div>
-    </div>
-    ${capas.length?`<div style="overflow-x:auto"><table><thead><tr><th>CAPA</th><th>Job</th><th>Title</th><th>Severity</th><th>Owner</th><th>Due</th><th>Status</th>${canManage?'<th class="no-print"></th>':''}</tr></thead><tbody id="capabody"></tbody></table></div><div class="empty hidden" id="capaempty" style="padding:18px">No CAPAs match the filter.</div>`:`<div class="empty">No CAPAs yet.${canManage?' Raise one when a job is held or a defect recurs.':''}</div>`}</div>`;
-  if(capas.length) renderCapaRows();
+    <div id="lv_capas"></div></div>`;
+  listView({ key:'capas', rows:capas,
+    columns:[ {label:'CAPA',sortVal:c=>c.id}, {label:'Job',sortVal:c=>c.jobNo||''}, {label:'Title',sortVal:c=>c.title||''},
+      {label:'Severity',sortVal:c=>SEV_RANK[c.severity]!=null?SEV_RANK[c.severity]:''}, {label:'Owner',sortVal:c=>c.owner||''},
+      {label:'Due',sortVal:c=>c.dueDate||''}, {label:'Status',sortVal:c=>c.status}, {label:'',thClass:'no-print'} ],
+    rowHTML:capaRow,
+    searchText:c=>(c.jobNo||'')+' '+(c.title||'')+' '+(c.owner||''), searchPlaceholder:'Job #, title, owner',
+    filters:[
+      {id:'status',label:'Status',options:['Open','In Progress','Closed'],match:(c,v)=>c.status===v},
+      {id:'severity',label:'Severity',options:['Low','Medium','High','Critical'],match:(c,v)=>c.severity===v}
+    ],
+    emptyText:'No CAPAs yet.'+(canManage?' Raise one when a job is held or a defect recurs.':''),
+    emptyFilterText:'No CAPAs match the filter.' });
 }
-function renderCapaRows(){
+const SEV_RANK={Low:0,Medium:1,High:2,Critical:3};
+function capaRow(c){
   const canManage=isMgrRole(); const today=new Date().toISOString().slice(0,10);
-  const st=val("cq_status"), q=(val("cq_q")||"").toLowerCase().trim();
-  let list=(window._capas||[]);
-  if(st) list=list.filter(c=>c.status===st);
-  if(q) list=list.filter(c=>((c.jobNo||"")+" "+(c.title||"")+" "+(c.owner||"")).toLowerCase().includes(q));
-  const tb=$("#capabody"); if(!tb)return;
-  tb.innerHTML=list.map(c=>{ const overdue=c.status!=='Closed'&&c.dueDate&&c.dueDate<today;
-    return `<tr><td><b>${esc(c.id)}</b></td><td>${c.jobNo?`<button class="btn ghost sm" onclick="go('lookup',{jobNo:'${jsq(c.jobNo)}'})">${esc(c.jobNo)}</button>`:'—'}</td><td>${esc(c.title)}</td><td>${capaSevPill(c.severity)}</td><td>${esc(c.owner||'—')}</td><td>${c.dueDate?(overdue?`<span class="flag bad">${esc(c.dueDate)} ⚠</span>`:esc(c.dueDate)):'—'}</td><td>${capaStatusPill(c.status)}</td>${canManage?`<td class="no-print"><button class="btn ghost sm" onclick="capaModal('${jsq(c.id)}')">Open</button> <button class="btn ghost sm" onclick="openAmend('${jsq(c.id)}','${jsq(c.id)}')">Amendments</button></td>`:''}</tr>`;
-  }).join("");
-  const e=$("#capaempty"); if(e)e.classList.toggle("hidden",!!list.length);
+  const overdue=c.status!=='Closed'&&c.dueDate&&c.dueDate<today;
+  return `<tr><td><b>${esc(c.id)}</b></td><td>${c.jobNo?`<button class="btn ghost sm" onclick="go('lookup',{jobNo:'${jsq(c.jobNo)}'})">${esc(c.jobNo)}</button>`:'—'}</td><td>${esc(c.title)}</td><td>${capaSevPill(c.severity)}</td><td>${esc(c.owner||'—')}</td><td>${c.dueDate?(overdue?`<span class="flag bad">${esc(c.dueDate)} ⚠</span>`:esc(c.dueDate)):'—'}</td><td>${capaStatusPill(c.status)}</td><td class="no-print">${canManage?`<button class="btn ghost sm" onclick="capaModal('${jsq(c.id)}')">Open</button> <button class="btn ghost sm" onclick="openAmend('${jsq(c.id)}','${jsq(c.id)}')">Amendments</button>`:''}</td></tr>`;
 }
 function capaModal(id, prefill){
   const c=id?(window._capas||[]).find(x=>x.id===id):null; const p=prefill||{};
@@ -731,18 +836,23 @@ async function ncrPage(){
   app().innerHTML=`<div class="card"><div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
       <div><h2 style="margin:0">Non-Conformance Reports</h2><p class="sub" style="margin:4px 0 0">${open} open of ${list.length}. Promote an NCR to a CAPA to drive corrective action.</p></div>
       <div style="margin-left:auto" class="no-print">${canManage?`<button class="btn gold" onclick="ncrModal()">+ Raise NCR</button>`:''}</div></div>
-    <div class="grid g3 no-print" style="margin:4px 0 14px"><div class="field"><label>Status</label><select id="nc_status" onchange="renderNcrRows()"><option value="">All</option><option>Open</option><option>Closed</option></select></div><div class="field"><label>Search</label><input id="nc_q" placeholder="NCR #, job, text" oninput="renderNcrRows()"></div></div>
-    ${list.length?`<div style="overflow-x:auto"><table><thead><tr><th>NCR</th><th>Job</th><th>Date</th><th>Description</th><th>Disposition</th><th>Severity</th><th>CAPA</th><th>Status</th>${canManage?'<th class="no-print"></th>':''}</tr></thead><tbody id="ncbody"></tbody></table></div><div class="empty hidden" id="ncempty" style="padding:18px">No NCRs match the filter.</div>`:`<div class="empty">No NCRs yet.${canManage?' Raise one when an inspection finds a nonconformance.':''}</div>`}</div>`;
-  if(list.length) renderNcrRows();
+    <div id="lv_ncrs"></div></div>`;
+  listView({ key:'ncrs', rows:list,
+    columns:[ {label:'NCR',sortVal:n=>n.id}, {label:'Job',sortVal:n=>n.jobNo||''}, {label:'Date',sortVal:n=>n.date||''}, {label:'Description'},
+      {label:'Disposition',sortVal:n=>n.disposition||''}, {label:'Severity',sortVal:n=>SEV_RANK[n.severity]!=null?SEV_RANK[n.severity]:''},
+      {label:'CAPA',sortVal:n=>n.capaId||''}, {label:'Status',sortVal:n=>n.status}, {label:'',thClass:'no-print'} ],
+    rowHTML:ncrRow,
+    searchText:n=>(n.id||'')+' '+(n.jobNo||'')+' '+(n.description||''), searchPlaceholder:'NCR #, job, text',
+    filters:[
+      {id:'status',label:'Status',options:['Open','Closed'],match:(n,v)=>n.status===v},
+      {id:'severity',label:'Severity',options:['Low','Medium','High','Critical'],match:(n,v)=>n.severity===v}
+    ],
+    emptyText:'No NCRs yet.'+(canManage?' Raise one when an inspection finds a nonconformance.':''),
+    emptyFilterText:'No NCRs match the filter.' });
 }
-function renderNcrRows(){
-  const canManage=isMgrRole(); const st=val("nc_status"), q=(val("nc_q")||"").toLowerCase().trim();
-  let list=(window._ncrs||[]);
-  if(st) list=list.filter(n=>n.status===st);
-  if(q) list=list.filter(n=>((n.id||"")+" "+(n.jobNo||"")+" "+(n.description||"")).toLowerCase().includes(q));
-  const tb=$("#ncbody"); if(!tb)return;
-  tb.innerHTML=list.map(n=>`<tr><td><b>${esc(n.id)}</b></td><td>${n.jobNo?`<button class="btn ghost sm" onclick="go('lookup',{jobNo:'${jsq(n.jobNo)}'})">${esc(n.jobNo)}</button>`:'—'}</td><td>${esc(n.date)}</td><td>${esc(n.description)}</td><td>${esc(n.disposition)}</td><td>${capaSevPill(n.severity)}</td><td>${n.capaId?`<button class="btn ghost sm" onclick="go('capa')">${esc(n.capaId)}</button>`:(canManage?`<button class="btn ghost sm" onclick="promoteNcr('${jsq(n.id)}')">Raise CAPA</button>`:'—')}</td><td>${ncrStatusPill(n.status)}</td>${canManage?`<td class="no-print"><button class="btn ghost sm" onclick="ncrModal('${jsq(n.id)}')">Edit</button> <button class="btn ghost sm" onclick="openAmend('${jsq(n.id)}','${jsq(n.id)}')">Amendments</button></td>`:''}</tr>`).join("");
-  const e=$("#ncempty"); if(e)e.classList.toggle("hidden",!!list.length);
+function ncrRow(n){
+  const canManage=isMgrRole();
+  return `<tr><td><b>${esc(n.id)}</b></td><td>${n.jobNo?`<button class="btn ghost sm" onclick="go('lookup',{jobNo:'${jsq(n.jobNo)}'})">${esc(n.jobNo)}</button>`:'—'}</td><td>${esc(n.date)}</td><td>${esc(n.description)}</td><td>${esc(n.disposition)}</td><td>${capaSevPill(n.severity)}</td><td>${n.capaId?`<button class="btn ghost sm" onclick="go('capa')">${esc(n.capaId)}</button>`:(canManage?`<button class="btn ghost sm" onclick="promoteNcr('${jsq(n.id)}')">Raise CAPA</button>`:'—')}</td><td>${ncrStatusPill(n.status)}</td><td class="no-print">${canManage?`<button class="btn ghost sm" onclick="ncrModal('${jsq(n.id)}')">Edit</button> <button class="btn ghost sm" onclick="openAmend('${jsq(n.id)}','${jsq(n.id)}')">Amendments</button>`:''}</td></tr>`;
 }
 function ncrModal(id){
   const n=id?(window._ncrs||[]).find(x=>x.id===id):null;
@@ -768,29 +878,63 @@ async function equipmentPage(){
   const canManage=isMgrRole();
   app().innerHTML=`<div class="empty">Loading…</div>`;
   let list=[]; try{ list=await api("/api/equipment"); }catch(e){ app().innerHTML=`<div class="card"><div class="empty">Could not load equipment — ${esc(e.message)}</div></div>`; return; }
-  window._equip=list;
+  window._equip=list; window._equipArchived=null; // archived list is fetched on demand per visit
   const overdue=list.filter(e=>e.calStatus==='Overdue').length, dueSoon=list.filter(e=>e.calStatus==='Due soon').length;
   app().innerHTML=`<div class="card"><div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
       <div><h2 style="margin:0">Equipment &amp; Calibration</h2><p class="sub" style="margin:4px 0 0">${list.length} items · ${overdue} overdue · ${dueSoon} due soon.</p></div>
       <div style="margin-left:auto" class="no-print"><button class="btn ghost" onclick="dlAuth('/api/equipment/calibration-history.csv','golden-qa-calibration-history.csv')">⤓ Calibration history (CSV)</button> ${canManage?`<button class="btn gold" onclick="equipModal()">+ Add equipment</button>`:''}</div></div>
-    <div class="grid g3 no-print" style="margin:4px 0 14px">
-      <div class="field"><label>Status</label><select id="eq_status" onchange="renderEquipRows()"><option value="">All</option><option>OK</option><option>Due soon</option><option>Overdue</option><option>Retired</option><option>Unscheduled</option></select></div>
-      <div class="field"><label>Search</label><input id="eq_q" placeholder="Name, type, machine, owner" oninput="renderEquipRows()"></div>
-    </div>
-    ${list.length?`<div style="overflow-x:auto"><table><thead><tr><th>ID</th><th>Name</th><th>Type</th><th>Machine</th><th>Last cal.</th><th>Next due</th><th>Status</th>${canManage?'<th class="no-print"></th>':''}</tr></thead><tbody id="eqbody"></tbody></table></div><div class="empty hidden" id="eqempty" style="padding:18px">No equipment matches the filter.</div>`:`<div class="empty">No equipment registered yet.${canManage?' Add gauges, verifiers, anilox rolls and machines to track calibration.':''}</div>`}</div>`;
-  if(list.length) renderEquipRows();
+    <div id="lv_equip"></div></div>`;
+  listView({ key:'equip', rows:list,
+    columns:[ {label:'ID',sortVal:e=>e.id}, {label:'Name',sortVal:e=>e.name||''}, {label:'Type',sortVal:e=>e.type||''},
+      {label:'Machine',sortVal:e=>e.machine?mlabel(e.machine):''}, {label:'Last cal.',sortVal:e=>e.calibratedOn||''},
+      {label:'Next due',sortVal:e=>e.daysToDue==null?'':e.daysToDue},
+      {label:'Status',sortVal:e=>e.archived?9:(EQ_STATUS_RANK[e.calStatus]!=null?EQ_STATUS_RANK[e.calStatus]:'')}, {label:'',thClass:'no-print'} ],
+    rowHTML:equipRow,
+    searchText:e=>(e.id||'')+' '+(e.name||'')+' '+(e.type||'')+' '+(e.machine||'')+' '+(e.machine?mlabel(e.machine):'')+' '+(e.owner||''),
+    searchPlaceholder:'Name, type, machine, owner',
+    filters:[
+      {id:'status',label:'Status',options:['OK','Due soon','Overdue','Retired','Unscheduled'].concat(canManage?['Archived']:[]),
+        match:(e,v)=>v==='Archived'?true:e.calStatus===v, onChange:equipStatusFilter},
+      {id:'type',label:'Type',options:['Machine','Anilox','Gauge','Verifier','Scale','Other'],match:(e,v)=>e.type===v}
+    ],
+    emptyText:'No equipment registered yet.'+(canManage?' Add gauges, verifiers, anilox rolls and machines to track calibration.':''),
+    emptyFilterText:'No equipment matches the filter.' });
+  // filter state persists across visits — if it was left on Archived, re-enter archived mode
+  if(window._lv.equip.state.filters.status==='Archived') equipStatusFilter('Archived');
 }
-function renderEquipRows(){
-  const canManage=isMgrRole(); const st=val("eq_status"), q=(val("eq_q")||"").toLowerCase().trim();
-  let list=(window._equip||[]);
-  if(st) list=list.filter(e=>e.calStatus===st);
-  if(q) list=list.filter(e=>((e.id||"")+" "+(e.name||"")+" "+(e.type||"")+" "+(e.machine||"")+" "+(e.owner||"")).toLowerCase().includes(q));
-  const tb=$("#eqbody"); if(!tb)return;
-  tb.innerHTML=list.map(e=>{ const overdue=e.calStatus==='Overdue', soon=e.calStatus==='Due soon';
-    const due=e.nextDue?`${esc(e.nextDue)}${e.daysToDue!=null?` <span style="color:var(--muted);font-size:12px">(${e.daysToDue<0?Math.abs(e.daysToDue)+'d ago':'in '+e.daysToDue+'d'})</span>`:''}`:'—';
-    return `<tr><td><b>${esc(e.id)}</b></td><td>${esc(e.name)}</td><td>${esc(e.type)}</td><td>${e.machine?`<span class="tag-machine">${esc(mlabel(e.machine))}</span>`:'—'}</td><td>${esc(e.calibratedOn||'—')}</td><td class="${overdue?'flag bad':(soon?'flag':'')}">${due}</td><td>${equipStatusPill(e.calStatus)}</td>${canManage?`<td class="no-print"><button class="btn gold sm" onclick="calibrateModal('${jsq(e.id)}')">Calibrate</button> <button class="btn ghost sm" onclick="equipHistoryModal('${jsq(e.id)}')">History</button> <button class="btn ghost sm" onclick="equipModal('${jsq(e.id)}')">Edit</button> <button class="btn ghost sm" onclick="openAmend('${jsq(e.id)}','${jsq(e.id+' · '+e.name)}')">Amendments</button></td>`:''}</tr>`;
-  }).join("");
-  const em=$("#eqempty"); if(em)em.classList.toggle("hidden",!!list.length);
+const EQ_STATUS_RANK={'Overdue':0,'Due soon':1,'OK':2,'Unscheduled':3,'Retired':4};
+/* the Status filter doubles as the archived/active mode switch: Archived swaps the data set */
+async function equipStatusFilter(v){
+  if(v==='Archived'){
+    if(!window._equipArchived){
+      try{ window._equipArchived=await api("/api/equipment?archived=1"); }
+      catch(e){ toast("Could not load archived equipment — "+e.message);
+        const lv=window._lv.equip; delete lv.state.filters.status; listView(lv.cfg); return; }
+    }
+    lvData('equip', window._equipArchived);
+  } else {
+    lvData('equip', window._equip||[]);
+  }
+}
+function equipRow(e){
+  const canManage=isMgrRole();
+  const overdue=e.calStatus==='Overdue', soon=e.calStatus==='Due soon';
+  const due=e.nextDue?`${esc(e.nextDue)}${e.daysToDue!=null?` <span style="color:var(--muted);font-size:12px">(${e.daysToDue<0?Math.abs(e.daysToDue)+'d ago':'in '+e.daysToDue+'d'})</span>`:''}`:'—';
+  const status=e.archived?`<span class="pill grey">Archived</span>`:equipStatusPill(e.calStatus);
+  const actions=e.archived
+    ?`<button class="btn gold sm" onclick="restoreEquip('${jsq(e.id)}')">Restore</button> <button class="btn ghost sm" onclick="equipHistoryModal('${jsq(e.id)}')">History</button> <button class="btn ghost sm" onclick="openAmend('${jsq(e.id)}','${jsq(e.id+' · '+e.name)}')">Amendments</button>`
+    :`<button class="btn gold sm" onclick="calibrateModal('${jsq(e.id)}')">Calibrate</button> <button class="btn ghost sm" onclick="equipHistoryModal('${jsq(e.id)}')">History</button> <button class="btn ghost sm" onclick="equipModal('${jsq(e.id)}')">Edit</button> <button class="btn ghost sm" onclick="openAmend('${jsq(e.id)}','${jsq(e.id+' · '+e.name)}')">Amendments</button> <button class="btn danger sm" onclick="archiveEquip('${jsq(e.id)}')">Delete</button>`;
+  return `<tr><td><b>${esc(e.id)}</b></td><td>${esc(e.name)}</td><td>${esc(e.type)}</td><td>${e.machine?`<span class="tag-machine">${esc(mlabel(e.machine))}</span>`:'—'}</td><td>${esc(e.calibratedOn||'—')}</td><td class="${overdue?'flag bad':(soon?'flag':'')}">${due}</td><td>${status}</td><td class="no-print">${canManage?actions:''}</td></tr>`;
+}
+/* "Delete" = archive: the record and its calibration history are kept for audits and the item can
+   be restored from the Status filter → Archived. */
+async function archiveEquip(id){
+  const e=(window._equip||[]).find(x=>x.id===id); if(!e)return;
+  if(!confirm(`Delete ${e.id} · ${e.name}?\n\nIt will be hidden from the register; its calibration history is kept and it can be restored from Status → Archived.`)) return;
+  try{ await api("/api/equipment/"+encodeURIComponent(id),{method:"DELETE"}); toast("Equipment archived"); equipmentPage(); }catch(err){ toast(err.message); }
+}
+async function restoreEquip(id){
+  try{ await api("/api/equipment/"+encodeURIComponent(id)+"/restore",{method:"POST"}); toast("Equipment restored"); equipmentPage(); }catch(err){ toast(err.message); }
 }
 function equipModal(id){
   const e=id?(window._equip||[]).find(x=>x.id===id):null;
@@ -903,36 +1047,28 @@ async function checklistsPage(){
       <div id="chkform"></div>
     </div>
     <div class="card">
-      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px">
-        <h3 style="margin:0">Recent submissions</h3>
-        <div class="no-print" style="margin-left:auto;display:flex;gap:8px;flex-wrap:wrap;align-items:center">
-          <select id="chkf_def" onchange="chkRenderList()" title="Filter by form"><option value="">All forms</option>${defs.map(d=>`<option value="${esc(d.id)}">${esc(d.code)}</option>`).join("")}</select>
-          <select id="chkf_status" onchange="chkRenderList()" title="Filter by status"><option value="">All statuses</option><option>Draft</option><option>Completed</option><option>Verified</option></select>
-          <input id="chkf_date" type="date" onchange="chkRenderList()" title="Filter by date" style="max-width:170px">
-          <button class="btn ghost sm" onclick="chkClearFilters()">Clear</button>
-        </div>
-      </div>
-      <div id="chklist"></div>
+      <h3 style="margin:0 0 8px">Recent submissions</h3>
+      <div id="lv_chks"></div>
     </div>`;
-  chkRenderList();
+  const defCodes={}; defs.forEach(d=>{ defCodes[d.id]=d.code; });
+  listView({ key:'chks', rows:subs,
+    columns:[ {label:'Code',sortVal:s=>s.code||''}, {label:'Title',sortVal:s=>s.title||''}, {label:'Date',sortVal:s=>s.date||''},
+      {label:'Shift',sortVal:s=>s.shift||''}, {label:'Status',sortVal:s=>s.status||''}, {label:'Completed by',sortVal:s=>s.completedByName||s.completedBy||''},
+      {label:'Verified by',sortVal:s=>s.verifiedByName||s.verifiedBy||''}, {label:'',thClass:'no-print'} ],
+    rowHTML:chkRow,
+    searchText:s=>(s.code||'')+' '+(s.title||'')+' '+(s.completedByName||s.completedBy||''), searchPlaceholder:'Code, title, person',
+    filters:[
+      {id:'form',label:'Form',options:defs.map(d=>d.id),optionLabel:id=>defCodes[id]||id,allLabel:'All forms',match:(s,v)=>s.defKey===v},
+      {id:'status',label:'Status',options:['Draft','Completed','Verified'],match:(s,v)=>s.status===v},
+      {id:'date',label:'Date',type:'date',match:(s,v)=>s.date===v}
+    ],
+    emptyText:'No checklists submitted yet.', emptyFilterText:'No checklists match these filters.' });
 }
-function chkClearFilters(){ ["chkf_def","chkf_status","chkf_date"].forEach(id=>{ const el=document.getElementById(id); if(el) el.value=""; }); chkRenderList(); }
-function chkRenderList(){
-  const host=$("#chklist"); if(!host)return;
-  const all=(window._chkSubs||[]);
-  const fd=val("chkf_def"), fst=val("chkf_status"), fdt=val("chkf_date");
-  let subs=all.slice();
-  if(fd) subs=subs.filter(s=>s.defKey===fd);
-  if(fst) subs=subs.filter(s=>s.status===fst);
-  if(fdt) subs=subs.filter(s=>s.date===fdt);
-  if(!subs.length){ host.innerHTML=`<div class="empty">${all.length?'No checklists match these filters.':'No checklists submitted yet.'}</div>`; return; }
-  const canMgr=isMgrRole();
-  host.innerHTML=`<div style="overflow-x:auto"><table><thead><tr><th>Code</th><th>Title</th><th>Date</th><th>Shift</th><th>Status</th><th>Completed by</th><th>Verified by</th><th class="no-print"></th></tr></thead><tbody>${subs.map(s=>{
-    const bad=(s.responses||[]).filter(r=>r.status&&r.status!=='Yes').length;
-    const pill=s.status==='Verified'?'<span class="pill green">Verified</span>':(s.status==='Completed'?'<span class="pill amber">Completed</span>':'<span class="pill grey">Draft</span>');
-    const canVerify=canMgr && s.status==='Completed';
-    return `<tr><td><b>${esc(s.code)}</b></td><td>${esc(s.title)}${bad?` <span class="pill red" title="Unsatisfactory items">${bad}✕</span>`:''}</td><td>${esc(s.date)}</td><td>${esc(s.shift||'—')}</td><td>${pill}</td><td>${esc(s.completedByName||s.completedBy||'')}</td><td>${esc(s.verifiedByName||s.verifiedBy||'—')}</td><td class="no-print"><button class="btn ghost sm" onclick="chkView('${jsq(s.id)}')">View</button> ${canVerify?`<button class="btn gold sm" onclick="chkVerify('${jsq(s.id)}')">Verify</button>`:''} <button class="btn ghost sm" onclick="openAmend('${jsq(s.id)}','${jsq(s.code+' '+s.date)}')">Amendments</button></td></tr>`;
-  }).join("")}</tbody></table></div>`;
+function chkRow(s){
+  const bad=(s.responses||[]).filter(r=>r.status&&r.status!=='Yes').length;
+  const pill=s.status==='Verified'?'<span class="pill green">Verified</span>':(s.status==='Completed'?'<span class="pill amber">Completed</span>':'<span class="pill grey">Draft</span>');
+  const canVerify=isMgrRole() && s.status==='Completed';
+  return `<tr><td><b>${esc(s.code)}</b></td><td>${esc(s.title)}${bad?` <span class="pill red" title="Unsatisfactory items">${bad}✕</span>`:''}</td><td>${esc(s.date)}</td><td>${esc(s.shift||'—')}</td><td>${pill}</td><td>${esc(s.completedByName||s.completedBy||'')}</td><td>${esc(s.verifiedByName||s.verifiedBy||'—')}</td><td class="no-print"><button class="btn ghost sm" onclick="chkView('${jsq(s.id)}')">View</button> ${canVerify?`<button class="btn gold sm" onclick="chkVerify('${jsq(s.id)}')">Verify</button>`:''} <button class="btn ghost sm" onclick="openAmend('${jsq(s.id)}','${jsq(s.code+' '+s.date)}')">Amendments</button></td></tr>`;
 }
 function chkPick(){
   const id=val("chk_def"); const def=(window._chkDefs||[]).find(d=>d.id===id); const host=$("#chkform"); if(!host)return;
@@ -1074,10 +1210,14 @@ async function loadSpc(){
 
 /* supplier scorecards */
 async function suppliersPage(){
-  app().innerHTML=`<div class="card"><h2>Supplier scorecards</h2><p class="sub">Quality by material supplier (from the Stage-1 Supplier field).</p><div id="sup_body"><div class="empty">Loading…</div></div></div>`;
+  app().innerHTML=`<div class="card"><h2>Supplier scorecards</h2><p class="sub">Quality by material supplier (from the Stage-1 Supplier field).</p><div id="lv_suppliers"><div class="empty">Loading…</div></div></div>`;
   let list; try{ list=await api("/api/suppliers"); }catch(e){ toast(e.message); return; }
-  const rows=list.map(s=>`<tr><td><b>${esc(s.supplier)}</b></td><td>${esc(s.jobs)}</td><td>${esc(s.released)}</td><td>${esc(s.holdReject)}</td><td><span class="pill ${s.fpy>=95?'green':(s.fpy>=85?'amber':'red')}">${esc(s.fpy)}%</span></td><td>${esc(s.defectKg)}</td><td>${esc(s.wasteKg)}</td></tr>`).join("");
-  $("#sup_body").innerHTML = list.length?`<div style="overflow-x:auto"><table><thead><tr><th>Supplier</th><th>Jobs</th><th>Released</th><th>Hold/Rej</th><th>FPY</th><th>Defect kg</th><th>Waste kg</th></tr></thead><tbody>${rows}</tbody></table></div>`:`<div class="empty">No supplier data yet — set the <b>Supplier</b> field in Stage 1.</div>`;
+  listView({ key:'suppliers', rows:list,
+    columns:[ {label:'Supplier',sortVal:s=>s.supplier||''}, {label:'Jobs',sortVal:s=>s.jobs}, {label:'Released',sortVal:s=>s.released},
+      {label:'Hold/Rej',sortVal:s=>s.holdReject}, {label:'FPY',sortVal:s=>s.fpy}, {label:'Defect kg',sortVal:s=>s.defectKg}, {label:'Waste kg',sortVal:s=>s.wasteKg} ],
+    rowHTML:s=>`<tr><td><b>${esc(s.supplier)}</b></td><td>${esc(s.jobs)}</td><td>${esc(s.released)}</td><td>${esc(s.holdReject)}</td><td><span class="pill ${s.fpy>=95?'green':(s.fpy>=85?'amber':'red')}">${esc(s.fpy)}%</span></td><td>${esc(s.defectKg)}</td><td>${esc(s.wasteKg)}</td></tr>`,
+    searchText:s=>s.supplier||'', searchPlaceholder:'Supplier name',
+    emptyText:'No supplier data yet — set the Supplier field in Stage 1.', emptyFilterText:'No suppliers match the search.' });
 }
 
 /* ---------- templates: Stage-1 setup defaults per press / product ---------- */
@@ -1088,10 +1228,15 @@ async function templatesPage(){
   app().innerHTML=`<div class="empty">Loading…</div>`;
   let list=[]; try{ list=await api("/api/templates"); }catch(e){ app().innerHTML=`<div class="card"><div class="empty">Could not load templates — ${esc(e.message)}</div></div>`; return; }
   window._templates=list;
-  const rows=list.map(t=>`<tr><td><b>${esc(t.name)}</b></td><td>${t.machine?esc(mlabel(t.machine)):'<span class="sub">Any press</span>'}</td><td>${t.productType?esc(t.productType):'<span class="sub">Any product</span>'}</td><td>${((t.settings&&t.settings.materials)||[]).length} mat · ${((t.settings&&t.settings.stations)||[]).length} stn</td><td class="no-print"><button class="btn ghost sm" onclick="templateForm('${jsq(t.id)}')">Edit</button> <button class="btn danger sm" onclick="templateDel('${jsq(t.id)}')">×</button></td></tr>`).join("")||`<tr><td colspan=5><div class="empty">No templates yet — create one to auto-fill Stage 1 on new jobs.</div></td></tr>`;
   app().innerHTML=`<div class="card"><div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap"><h2 style="margin:0">Templates</h2><div style="margin-left:auto" class="no-print"><button class="btn gold" onclick="templateForm()">+ New template</button></div></div>
     <p class="sub">Default Stage&nbsp;1 setup (machine settings, raw materials, print-station values) applied automatically to a new job by its printing press and/or product type. The most specific match wins; values stay editable on the job.</p>
-    <div style="overflow-x:auto"><table><thead><tr><th>Name</th><th>Press</th><th>Product Type</th><th>Defaults</th><th></th></tr></thead><tbody>${rows}</tbody></table></div></div>`;
+    <div id="lv_templates"></div></div>`;
+  listView({ key:'templates', rows:list,
+    columns:[ {label:'Name',sortVal:t=>t.name||''}, {label:'Press',sortVal:t=>t.machine?mlabel(t.machine):''},
+      {label:'Product Type',sortVal:t=>t.productType||''}, {label:'Defaults'}, {label:'',thClass:'no-print'} ],
+    rowHTML:t=>`<tr><td><b>${esc(t.name)}</b></td><td>${t.machine?esc(mlabel(t.machine)):'<span class="sub">Any press</span>'}</td><td>${t.productType?esc(t.productType):'<span class="sub">Any product</span>'}</td><td>${((t.settings&&t.settings.materials)||[]).length} mat · ${((t.settings&&t.settings.stations)||[]).length} stn</td><td class="no-print"><button class="btn ghost sm" onclick="templateForm('${jsq(t.id)}')">Edit</button> <button class="btn danger sm" onclick="templateDel('${jsq(t.id)}')">×</button></td></tr>`,
+    searchText:t=>(t.name||'')+' '+(t.machine?mlabel(t.machine):'')+' '+(t.productType||''), searchPlaceholder:'Name, press, product',
+    emptyText:'No templates yet — create one to auto-fill Stage 1 on new jobs.', emptyFilterText:'No templates match the search.' });
 }
 async function templateDel(id){ if(!confirm("Delete this template?")) return; try{ await api("/api/templates/"+encodeURIComponent(id),{method:"DELETE"}); toast("Template deleted"); templatesPage(); }catch(e){ toast(e.message); } }
 function templateForm(id){ const src=(window._templates||[]).find(x=>x.id===id);
@@ -1140,11 +1285,17 @@ async function team(){
   const canManage=["Quality Manager","Administrator"].includes(ME.role);
   let users=[]; try{ users=await api("/api/admin/users"); }catch(e){ users=[]; }
   window._users=users;
-  const rows=users.map(u=>`<tr><td><b>${esc(u.id)}</b></td><td>${esc(u.name)}</td><td>${esc(u.role)}</td><td>${(u.qualifiedStages&&u.qualifiedStages.length)?esc(u.qualifiedStages.slice().sort().join(', ')):'—'}</td>${canManage?`<td class="no-print"><button class="btn ghost sm" onclick="userModal('${jsq(u.id)}')">Edit</button> <button class="btn danger sm" onclick="delUser('${jsq(u.id)}')">Remove</button></td>`:''}</tr>`).join("");
   app().innerHTML=`<div class="card"><h2>Team &amp; Access</h2><p class="sub">People who can sign in, their roles, and which stages they're qualified to sign off.</p>
     <h3>Users ${canManage?`<button class="btn gold sm no-print" style="margin-left:8px" onclick="userModal()">+ Add user</button>`:''}</h3>
-    <div style="overflow-x:auto"><table><thead><tr><th>Username</th><th>Name</th><th>Role</th><th>Qualified stages</th>${canManage?'<th class="no-print"></th>':''}</tr></thead><tbody>${rows||`<tr><td colspan="5" style="color:var(--muted)">No users.</td></tr>`}</tbody></table></div>
+    <div id="lv_team"></div>
     ${canManage?'<p class="sub" style="margin-top:10px">Roles: QA Officer · Supervisor · Quality Manager · Administrator. Supervisors and above can edit jobs &amp; settings; Quality Manager/Administrator manage users.</p>':'<p class="sub" style="margin-top:8px">Only a Quality Manager or Administrator can add or edit users.</p>'}</div>`;
+  listView({ key:'team', rows:users,
+    columns:[ {label:'Username',sortVal:u=>u.id}, {label:'Name',sortVal:u=>u.name||''}, {label:'Role',sortVal:u=>u.role||''},
+      {label:'Qualified stages'}, {label:'',thClass:'no-print'} ],
+    rowHTML:u=>`<tr><td><b>${esc(u.id)}</b></td><td>${esc(u.name)}</td><td>${esc(u.role)}</td><td>${(u.qualifiedStages&&u.qualifiedStages.length)?esc(u.qualifiedStages.slice().sort().join(', ')):'—'}</td><td class="no-print">${canManage?`<button class="btn ghost sm" onclick="userModal('${jsq(u.id)}')">Edit</button> <button class="btn danger sm" onclick="delUser('${jsq(u.id)}')">Remove</button>`:''}</td></tr>`,
+    searchText:u=>(u.id||'')+' '+(u.name||''), searchPlaceholder:'Username or name',
+    filters:[ {id:'role',label:'Role',options:ROLES.slice(),match:(u,v)=>u.role===v} ],
+    emptyText:'No users.', emptyFilterText:'No users match the filter.' });
 }
 /* audit trail */
 async function auditTrail(){
@@ -1158,14 +1309,25 @@ async function auditTrail(){
       <div class="field"><label>From</label><input id="au_from" type="date" onchange="auditLoad()"></div>
       <div class="field"><label>To</label><input id="au_to" type="date" onchange="auditLoad()"></div>
     </div>
-    <div id="auditRows"><div class="empty">Loading…</div></div></div>`;
+    <div id="lv_audit"></div></div>`;
+  /* server-side filters above feed lvData; the list itself is client-paged/sorted (toolbar:false —
+     one filter bar per view) */
+  listView({ key:'audit', rows:[], toolbar:false,
+    columns:[ {label:'Time',sortVal:x=>x.ts||''}, {label:'User',sortVal:x=>x.user||''}, {label:'Action',sortVal:x=>x.action||''},
+      {label:'Record',sortVal:x=>x.recordId||x.jobNo||''}, {label:'Changes'} ],
+    rowHTML:auditRow,
+    emptyText:'No matching amendments.', emptyFilterText:'No matching amendments.' });
   auditLoad();
+}
+function auditRow(x){
+  const chg=(x.changes&&x.changes.length)?x.changes.map(c=>`<div><b>${esc(c.field)}</b>: <span style="color:var(--muted)">${esc(String(c.from)||'∅')}</span> → ${esc(String(c.to)||'∅')}</div>`).join(""):esc(x.detail||'');
+  return `<tr><td style="white-space:nowrap">${esc((x.ts||'').replace('T',' ').slice(0,19))}</td><td>${esc(x.user)}</td><td>${esc(x.action)}</td><td>${esc(x.recordId||x.jobNo||'')}</td><td>${chg}</td></tr>`;
 }
 function auditQuery(){ const p=new URLSearchParams(); const rec=val("au_rec").trim(); const t=val("au_type"), f=val("au_from"), to=val("au_to");
   if(rec){ p.set('recordId',rec); p.set('jobNo',rec); } // match either a record id or a job number
   if(t) p.set('recordType',t); if(f) p.set('from',f); if(to) p.set('to',to); p.set('limit','1000'); return p.toString(); }
 async function auditLoad(){
-  const host=$("#auditRows"); if(!host)return;
+  if(!window._lv.audit || !document.getElementById("lv_audit"))return;
   // recordId and jobNo are ANDed server-side; when the user types one value we want OR, so query twice if needed.
   const rec=val("au_rec").trim();
   let list=[];
@@ -1175,11 +1337,9 @@ async function auditLoad(){
       const byJob=await api("/api/audit?jobNo="+encodeURIComponent(rec)+"&"+base.toString());
       const seen=new Set(); list=[...byId,...byJob].filter(e=>{ const k=e.ts+e.action+(e.recordId||''); if(seen.has(k))return false; seen.add(k); return true; });
     } else { list=await api("/api/audit?"+auditQuery()); }
-  }catch(e){ host.innerHTML=`<div class="empty">${esc(e.message)}</div>`; return; }
-  host.innerHTML=`<div style="overflow-x:auto;max-height:66vh;overflow-y:auto"><table><thead><tr><th>Time</th><th>User</th><th>Action</th><th>Record</th><th>Changes</th></tr></thead><tbody>${list.length?list.map(x=>{
-    const chg=(x.changes&&x.changes.length)?x.changes.map(c=>`<div><b>${esc(c.field)}</b>: <span style="color:var(--muted)">${esc(String(c.from)||'∅')}</span> → ${esc(String(c.to)||'∅')}</div>`).join(""):esc(x.detail||'');
-    return `<tr><td style="white-space:nowrap">${esc((x.ts||'').replace('T',' ').slice(0,19))}</td><td>${esc(x.user)}</td><td>${esc(x.action)}</td><td>${esc(x.recordId||x.jobNo||'')}</td><td>${chg}</td></tr>`;
-  }).join(""):`<tr><td colspan="5" style="color:var(--muted)">No matching amendments.</td></tr>`}</tbody></table></div>`;
+  }catch(e){ toast(e.message); list=[]; }
+  window._lv.audit.state.page=0; // a filter change means a new result set — jump back to page 1
+  lvData('audit', list);
 }
 function auditExport(){ dlAuth("/api/audit/export.csv?"+auditQuery(), "golden-qa-amendments-history.csv"); }
 async function verifyAudit(){ const host=$("#auditVerify"); if(host)host.innerHTML='<span class="sub">Checking…</span>';

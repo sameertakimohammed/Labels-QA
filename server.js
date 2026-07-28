@@ -1202,7 +1202,9 @@ async function api(req, res, url) {
   }
 
   if (seg[0]==='equipment' && method==='GET' && !seg[1]) {
-    let list = (DB.equipment||[]).map(equipView);
+    // Archived items are hidden from the register by default; ?archived=1 lists only them.
+    const arch=url.searchParams.get('archived')==='1';
+    let list = (DB.equipment||[]).filter(e=>arch?e.archived:!e.archived).map(equipView);
     const fst=url.searchParams.get('status'); if(fst) list=list.filter(e=>e.calStatus===fst);
     const fty=url.searchParams.get('type'); if(fty) list=list.filter(e=>e.type===fty);
     return send(res,200, list);
@@ -1241,6 +1243,7 @@ async function api(req, res, url) {
   if (seg[0]==='equipment' && seg[1] && seg[2]==='calibrate' && method==='POST') {
     if(!isManager(user)) return send(res,403,{error:'Only a Supervisor, Quality Manager or Administrator can record calibration'});
     const e=(DB.equipment||[]).find(x=>x.id===decodeURIComponent(seg[1])); if(!e) return send(res,404,{error:'Equipment not found'});
+    if(e.archived) return send(res,409,{error:'Equipment is archived — restore it first'});
     const b=await readBody(req); const on=String(b.on||'').trim()||todayYmd();
     if(!isValidYmd(on)) return send(res,400,{error:'Calibration date must be a valid YYYY-MM-DD date'});
     const nextDue=String(b.nextDue||'').trim(); if(nextDue && !isValidYmd(nextDue)) return send(res,400,{error:'Next due date must be a valid YYYY-MM-DD date'});
@@ -1267,6 +1270,7 @@ async function api(req, res, url) {
   if (seg[0]==='equipment' && seg[1] && method==='PUT') {
     if(!isManager(user)) return send(res,403,{error:'Only a Supervisor, Quality Manager or Administrator can manage equipment'});
     const e=(DB.equipment||[]).find(x=>x.id===decodeURIComponent(seg[1])); if(!e) return send(res,404,{error:'Equipment not found'});
+    if(e.archived) return send(res,409,{error:'Equipment is archived — restore it first'});
     const b=await readBody(req);
     const eBefore=JSON.parse(JSON.stringify(e));
     // calibratedOn is NOT editable here — it is set only through the calibrate flow so it always has a
@@ -1277,6 +1281,26 @@ async function api(req, res, url) {
     if(typeof b.active==='boolean') e.active=b.active;
     e.updatedAt=new Date().toISOString();
     audit(user,'equip-update',{ recordType:'equipment', recordId:e.id, detail:e.id, changes:auditDiff(eBefore, e) }); saveDB(); return send(res,200,equipView(e));
+  }
+  // DELETE = archive, not removal: the item (and its F-009 calibration history) is kept so the
+  // register stays reconstructible for SQF audits; it just leaves the default list and all KPIs.
+  if (seg[0]==='equipment' && seg[1] && !seg[2] && method==='DELETE') {
+    if(!isManager(user)) return send(res,403,{error:'Only a Supervisor, Quality Manager or Administrator can manage equipment'});
+    const e=(DB.equipment||[]).find(x=>x.id===decodeURIComponent(seg[1])); if(!e) return send(res,404,{error:'Equipment not found'});
+    if(e.archived) return send(res,409,{error:'Equipment is already archived'});
+    const eBefore=JSON.parse(JSON.stringify(e));
+    e.archived=true; e.archivedAt=new Date().toISOString(); e.archivedBy=user.id; e.updatedAt=e.archivedAt;
+    audit(user,'equip-archive',{ recordType:'equipment', recordId:e.id, detail:e.id+': '+e.name, changes:auditDiff(eBefore, e) });
+    saveDB(); return send(res,200,{ ok:true });
+  }
+  if (seg[0]==='equipment' && seg[1] && seg[2]==='restore' && method==='POST') {
+    if(!isManager(user)) return send(res,403,{error:'Only a Supervisor, Quality Manager or Administrator can manage equipment'});
+    const e=(DB.equipment||[]).find(x=>x.id===decodeURIComponent(seg[1])); if(!e) return send(res,404,{error:'Equipment not found'});
+    if(!e.archived) return send(res,409,{error:'Equipment is not archived'});
+    const eBefore=JSON.parse(JSON.stringify(e));
+    delete e.archived; delete e.archivedAt; delete e.archivedBy; e.updatedAt=new Date().toISOString();
+    audit(user,'equip-restore',{ recordType:'equipment', recordId:e.id, detail:e.id+': '+e.name, changes:auditDiff(eBefore, e) });
+    saveDB(); return send(res,200,{ ok:true });
   }
 
   if (seg[0]==='templates' && method==='GET' && !seg[1]) {
@@ -1467,7 +1491,7 @@ function exec(){
   const today=todayYmd();
   const openCapas=(DB.capas||[]).filter(c=>c.status!=='Closed');
   const overdueCapas=openCapas.filter(c=>c.dueDate&&c.dueDate<today).map(c=>({ id:c.id, jobNo:c.jobNo, title:c.title, dueDate:c.dueDate, owner:c.owner, severity:c.severity }));
-  const equip=(DB.equipment||[]).filter(e=>e.active!==false).map(equipView);
+  const equip=(DB.equipment||[]).filter(e=>e.active!==false && !e.archived).map(equipView);
   const overdueCal=equip.filter(e=>e.calStatus==='Overdue').map(e=>({ id:e.id, name:e.name, nextDue:e.nextDue, days:e.daysToDue }));
   const dueSoonCal=equip.filter(e=>e.calStatus==='Due soon').map(e=>({ id:e.id, name:e.name, nextDue:e.nextDue, days:e.daysToDue }));
   const holds=DB.jobs.filter(j=>{ const s=jobStatus(j); return s==='Hold'||s==='Rejected'; }).map(j=>({ jobNo:j.jobNo, status:jobStatus(j), product:j.product }));
@@ -1487,7 +1511,7 @@ function exec(){
 /* Prometheus exposition format (text/plain; version=0.0.4). */
 function metricsText(){
   const a=analytics(); const today=todayYmd();
-  const eq=(DB.equipment||[]).filter(x=>x.active!==false).map(equipView);
+  const eq=(DB.equipment||[]).filter(x=>x.active!==false && !x.archived).map(equipView);
   const overdueCal=eq.filter(x=>x.calStatus==='Overdue').length;
   const openCapas=(DB.capas||[]).filter(c=>c.status!=='Closed'); const overdueCapas=openCapas.filter(c=>c.dueDate&&c.dueDate<today).length;
   const out=[]; const add=(name,help,type,val)=>{ out.push('# HELP '+name+' '+help, '# TYPE '+name+' '+type, name+' '+val); };
@@ -1641,7 +1665,7 @@ function buildDigest(){
   const inProgress=DB.jobs.filter(j=>jobStatus(j)==='In Progress').length;
   const topDefects=Object.entries(a.defects).sort((x,y)=>y[1]-x[1]).slice(0,5).map(([k,v])=>({ defect:k, kg:Math.round(v*100)/100 }));
   const overdueCapas=(DB.capas||[]).filter(c=>c.status!=='Closed'&&c.dueDate&&c.dueDate<today).map(c=>({ id:c.id, title:c.title, dueDate:c.dueDate }));
-  const overdueCal=(DB.equipment||[]).filter(e=>e.active!==false).map(equipView).filter(e=>e.calStatus==='Overdue').map(e=>({ id:e.id, name:e.name, nextDue:e.nextDue }));
+  const overdueCal=(DB.equipment||[]).filter(e=>e.active!==false && !e.archived).map(equipView).filter(e=>e.calStatus==='Overdue').map(e=>({ id:e.id, name:e.name, nextDue:e.nextDue }));
   return { org:CFG.orgName, generated:new Date().toISOString(), kpis:a.kpis, inProgress, holds, topDefects, overdueCapas, overdueCal };
 }
 function digestText(d){

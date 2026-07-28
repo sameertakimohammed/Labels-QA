@@ -346,6 +346,44 @@ async function main() {
     r = await request('POST', '/api/equipment', { name: 'nope' }, officerToken);
     eq('non-manager POST /api/equipment -> 403', r.status, 403);
 
+    // 20b. equipment archive (DELETE = soft archive; history kept; restorable)
+    const ARCNAME = 'Smoke Archive Gauge ' + PID;
+    r = await request('POST', '/api/equipment', { name: ARCNAME, type: 'Gauge', calibratedOn: '2020-01-01', calibrationIntervalDays: 30 }, adminToken);
+    const arcId = r.body && r.body.id;
+    await request('POST', '/api/equipment/' + encodeURIComponent(arcId) + '/calibrate', { result: 'Pass', intervalDays: 365 }, adminToken);
+    r = await request('DELETE', '/api/equipment/' + encodeURIComponent(arcId), undefined, officerToken);
+    eq('non-manager DELETE equipment -> 403', r.status, 403);
+    r = await request('DELETE', '/api/equipment/' + encodeURIComponent(arcId), undefined, adminToken);
+    eq('DELETE /api/equipment/:id (archive) -> 200', r.status, 200);
+    r = await request('GET', '/api/equipment', undefined, adminToken);
+    ok('archived item hidden from default list', !(r.body || []).some((e) => e.id === arcId), arcId);
+    r = await request('GET', '/api/equipment?archived=1', undefined, adminToken);
+    const arcRow = (r.body || []).find((e) => e.id === arcId);
+    ok('archived item listed via ?archived=1 with archivedBy', !!(arcRow && arcRow.archived === true && arcRow.archivedBy === 'admin'), JSON.stringify(arcRow && { a: arcRow.archived, by: arcRow.archivedBy }));
+    r = await request('GET', '/api/equipment/' + encodeURIComponent(arcId) + '/history', undefined, adminToken);
+    ok('calibration history survives archive', r.status === 200 && (r.body.history || []).length === 1, JSON.stringify(r.body && r.body.history && r.body.history.length));
+    r = await request('GET', '/api/equipment/calibration-history.csv', undefined, adminToken);
+    ok('archived item kept in calibration CSV extract', r.status === 200 && r.raw.includes(ARCNAME), 'csv len=' + r.raw.length);
+    r = await request('POST', '/api/equipment/' + encodeURIComponent(arcId) + '/calibrate', { result: 'Pass' }, adminToken);
+    eq('calibrate archived equipment -> 409', r.status, 409);
+    r = await request('PUT', '/api/equipment/' + encodeURIComponent(arcId), { name: 'renamed' }, adminToken);
+    eq('PUT archived equipment -> 409', r.status, 409);
+    r = await request('GET', '/api/exec', undefined, adminToken);
+    ok('archived item excluded from exec overdue-cal list', !((r.body.lists || {}).overdueCal || []).some((e) => e.id === arcId), arcId);
+    r = await request('DELETE', '/api/equipment/' + encodeURIComponent(arcId), undefined, adminToken);
+    eq('archive an archived item -> 409', r.status, 409);
+    r = await request('DELETE', '/api/equipment/EQ-NOPE-' + PID, undefined, adminToken);
+    eq('archive unknown equipment -> 404', r.status, 404);
+    r = await request('POST', '/api/equipment/' + encodeURIComponent(arcId) + '/restore', undefined, officerToken);
+    eq('non-manager restore -> 403', r.status, 403);
+    r = await request('POST', '/api/equipment/' + encodeURIComponent(arcId) + '/restore', undefined, adminToken);
+    eq('POST /api/equipment/:id/restore -> 200', r.status, 200);
+    r = await request('GET', '/api/equipment', undefined, adminToken);
+    const restRow = (r.body || []).find((e) => e.id === arcId);
+    ok('restored item back in default list without archive fields', !!restRow && !restRow.archived && !restRow.archivedBy, JSON.stringify(restRow && { a: restRow.archived, by: restRow.archivedBy }));
+    r = await request('POST', '/api/equipment/' + encodeURIComponent(arcId) + '/restore', undefined, adminToken);
+    eq('restore a non-archived item -> 409', r.status, 409);
+
     // 21. executive dashboard (RAG vs targets)
     r = await request('GET', '/api/exec', undefined, adminToken);
     eq('GET /api/exec -> 200', r.status, 200);
