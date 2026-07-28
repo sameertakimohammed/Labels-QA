@@ -768,29 +768,54 @@ async function equipmentPage(){
   const canManage=isMgrRole();
   app().innerHTML=`<div class="empty">Loading…</div>`;
   let list=[]; try{ list=await api("/api/equipment"); }catch(e){ app().innerHTML=`<div class="card"><div class="empty">Could not load equipment — ${esc(e.message)}</div></div>`; return; }
-  window._equip=list;
+  window._equip=list; window._equipArchived=null; // archived list is fetched on demand per visit
   const overdue=list.filter(e=>e.calStatus==='Overdue').length, dueSoon=list.filter(e=>e.calStatus==='Due soon').length;
   app().innerHTML=`<div class="card"><div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
       <div><h2 style="margin:0">Equipment &amp; Calibration</h2><p class="sub" style="margin:4px 0 0">${list.length} items · ${overdue} overdue · ${dueSoon} due soon.</p></div>
       <div style="margin-left:auto" class="no-print"><button class="btn ghost" onclick="dlAuth('/api/equipment/calibration-history.csv','golden-qa-calibration-history.csv')">⤓ Calibration history (CSV)</button> ${canManage?`<button class="btn gold" onclick="equipModal()">+ Add equipment</button>`:''}</div></div>
     <div class="grid g3 no-print" style="margin:4px 0 14px">
-      <div class="field"><label>Status</label><select id="eq_status" onchange="renderEquipRows()"><option value="">All</option><option>OK</option><option>Due soon</option><option>Overdue</option><option>Retired</option><option>Unscheduled</option></select></div>
+      <div class="field"><label>Status</label><select id="eq_status" onchange="renderEquipRows()"><option value="">All</option><option>OK</option><option>Due soon</option><option>Overdue</option><option>Retired</option><option>Unscheduled</option>${canManage?'<option>Archived</option>':''}</select></div>
       <div class="field"><label>Search</label><input id="eq_q" placeholder="Name, type, machine, owner" oninput="renderEquipRows()"></div>
     </div>
-    ${list.length?`<div style="overflow-x:auto"><table><thead><tr><th>ID</th><th>Name</th><th>Type</th><th>Machine</th><th>Last cal.</th><th>Next due</th><th>Status</th>${canManage?'<th class="no-print"></th>':''}</tr></thead><tbody id="eqbody"></tbody></table></div><div class="empty hidden" id="eqempty" style="padding:18px">No equipment matches the filter.</div>`:`<div class="empty">No equipment registered yet.${canManage?' Add gauges, verifiers, anilox rolls and machines to track calibration.':''}</div>`}</div>`;
-  if(list.length) renderEquipRows();
+    <div style="overflow-x:auto"><table><thead><tr><th>ID</th><th>Name</th><th>Type</th><th>Machine</th><th>Last cal.</th><th>Next due</th><th>Status</th>${canManage?'<th class="no-print"></th>':''}</tr></thead><tbody id="eqbody"></tbody></table></div>
+    <div class="empty hidden" id="eqempty" style="padding:18px">${list.length?'No equipment matches the filter.':`No equipment registered yet.${canManage?' Add gauges, verifiers, anilox rolls and machines to track calibration.':''}`}</div></div>`;
+  renderEquipRows();
 }
-function renderEquipRows(){
+async function renderEquipRows(){
   const canManage=isMgrRole(); const st=val("eq_status"), q=(val("eq_q")||"").toLowerCase().trim();
-  let list=(window._equip||[]);
-  if(st) list=list.filter(e=>e.calStatus===st);
+  const archMode = st==='Archived';
+  let list;
+  if(archMode){
+    if(!window._equipArchived){
+      try{ window._equipArchived=await api("/api/equipment?archived=1"); }
+      catch(e){ toast("Could not load archived equipment — "+e.message); const s=$("#eq_status"); if(s)s.value=""; return renderEquipRows(); }
+    }
+    list=window._equipArchived||[];
+  } else {
+    list=(window._equip||[]);
+    if(st) list=list.filter(e=>e.calStatus===st);
+  }
   if(q) list=list.filter(e=>((e.id||"")+" "+(e.name||"")+" "+(e.type||"")+" "+(e.machine||"")+" "+(e.owner||"")).toLowerCase().includes(q));
   const tb=$("#eqbody"); if(!tb)return;
   tb.innerHTML=list.map(e=>{ const overdue=e.calStatus==='Overdue', soon=e.calStatus==='Due soon';
     const due=e.nextDue?`${esc(e.nextDue)}${e.daysToDue!=null?` <span style="color:var(--muted);font-size:12px">(${e.daysToDue<0?Math.abs(e.daysToDue)+'d ago':'in '+e.daysToDue+'d'})</span>`:''}`:'—';
-    return `<tr><td><b>${esc(e.id)}</b></td><td>${esc(e.name)}</td><td>${esc(e.type)}</td><td>${e.machine?`<span class="tag-machine">${esc(mlabel(e.machine))}</span>`:'—'}</td><td>${esc(e.calibratedOn||'—')}</td><td class="${overdue?'flag bad':(soon?'flag':'')}">${due}</td><td>${equipStatusPill(e.calStatus)}</td>${canManage?`<td class="no-print"><button class="btn gold sm" onclick="calibrateModal('${jsq(e.id)}')">Calibrate</button> <button class="btn ghost sm" onclick="equipHistoryModal('${jsq(e.id)}')">History</button> <button class="btn ghost sm" onclick="equipModal('${jsq(e.id)}')">Edit</button> <button class="btn ghost sm" onclick="openAmend('${jsq(e.id)}','${jsq(e.id+' · '+e.name)}')">Amendments</button></td>`:''}</tr>`;
+    const status=archMode?`<span class="pill grey">Archived</span>`:equipStatusPill(e.calStatus);
+    const actions=archMode
+      ?`<button class="btn gold sm" onclick="restoreEquip('${jsq(e.id)}')">Restore</button> <button class="btn ghost sm" onclick="equipHistoryModal('${jsq(e.id)}')">History</button> <button class="btn ghost sm" onclick="openAmend('${jsq(e.id)}','${jsq(e.id+' · '+e.name)}')">Amendments</button>`
+      :`<button class="btn gold sm" onclick="calibrateModal('${jsq(e.id)}')">Calibrate</button> <button class="btn ghost sm" onclick="equipHistoryModal('${jsq(e.id)}')">History</button> <button class="btn ghost sm" onclick="equipModal('${jsq(e.id)}')">Edit</button> <button class="btn ghost sm" onclick="openAmend('${jsq(e.id)}','${jsq(e.id+' · '+e.name)}')">Amendments</button> <button class="btn danger sm" onclick="archiveEquip('${jsq(e.id)}')">Delete</button>`;
+    return `<tr><td><b>${esc(e.id)}</b></td><td>${esc(e.name)}</td><td>${esc(e.type)}</td><td>${e.machine?`<span class="tag-machine">${esc(mlabel(e.machine))}</span>`:'—'}</td><td>${esc(e.calibratedOn||'—')}</td><td class="${overdue?'flag bad':(soon?'flag':'')}">${due}</td><td>${status}</td>${canManage?`<td class="no-print">${actions}</td>`:''}</tr>`;
   }).join("");
   const em=$("#eqempty"); if(em)em.classList.toggle("hidden",!!list.length);
+}
+/* "Delete" = archive: the record and its calibration history are kept for audits and the item can
+   be restored from the Status filter → Archived. */
+async function archiveEquip(id){
+  const e=(window._equip||[]).find(x=>x.id===id); if(!e)return;
+  if(!confirm(`Delete ${e.id} · ${e.name}?\n\nIt will be hidden from the register; its calibration history is kept and it can be restored from Status → Archived.`)) return;
+  try{ await api("/api/equipment/"+encodeURIComponent(id),{method:"DELETE"}); toast("Equipment archived"); equipmentPage(); }catch(err){ toast(err.message); }
+}
+async function restoreEquip(id){
+  try{ await api("/api/equipment/"+encodeURIComponent(id)+"/restore",{method:"POST"}); toast("Equipment restored"); equipmentPage(); }catch(err){ toast(err.message); }
 }
 function equipModal(id){
   const e=id?(window._equip||[]).find(x=>x.id===id):null;
