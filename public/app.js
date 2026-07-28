@@ -643,10 +643,21 @@ function repTable(arrKey,cols,addLabel){
   return `<div style="overflow-x:auto"><table><thead>${head}</thead><tbody>${body}</tbody></table></div><div class="row-actions"><button class="btn ghost sm" onclick="rowAdd('${arrKey}')">${esc(addLabel||'+ Add row')}</button></div>`;
 }
 
-/* photos */
-function photoBlock(d){ const photos=d.photos||[]; window._photos=photos.slice(); return `<h3>Photos</h3><div class="row-actions"><label class="btn ghost sm" style="cursor:pointer">📷 Add photo<input type="file" accept="image/*" capture="environment" style="display:none" onchange="addPhoto(event)"></label></div><div class="thumbs" id="thumbs">${photos.map(u=>`<img src="${esc(u)}">`).join("")}</div>`; }
-async function addPhoto(ev){ const f=ev.target.files[0]; if(!f)return; const dataUrl=await new Promise(r=>{ const fr=new FileReader(); fr.onload=()=>r(fr.result); fr.readAsDataURL(f); });
-  try{ const res=await api("/api/upload",{method:"POST",body:{dataUrl,name:f.name}}); window._photos.push(res.url); $("#thumbs").innerHTML+=`<img src="${esc(res.url)}">`; toast("Photo added"); }catch(e){ toast("Upload failed (offline?)"); } }
+/* photos & videos — every stage form can attach either; stored in the same photos[] array */
+function isVideoUrl(u){ return /\.(mp4|webm|mov|m4v|3gp)(\?|$)/i.test(String(u||'')); }
+function mediaThumb(u){ return isVideoUrl(u)
+  ? `<span class="vid-wrap"><video src="${esc(u)}" controls preload="metadata"></video><span class="vid-note">🎥 Video attached — view in the app</span></span>`
+  : `<img src="${esc(u)}">`; }
+function photoBlock(d){ const photos=d.photos||[]; window._photos=photos.slice(); return `<h3>Photos &amp; Videos</h3><div class="row-actions">
+    <label class="btn ghost sm" style="cursor:pointer">📷 Add photo<input type="file" accept="image/*" capture="environment" style="display:none" onchange="addMedia(event)"></label>
+    <label class="btn ghost sm" style="cursor:pointer">🎥 Add video<input type="file" accept="video/*" capture="environment" style="display:none" onchange="addMedia(event)"></label>
+  </div><div class="thumbs" id="thumbs">${photos.map(mediaThumb).join("")}</div>`; }
+async function addMedia(ev){ const f=ev.target.files[0]; if(!f)return; ev.target.value='';
+  const isVid=(f.type||'').startsWith('video/');
+  if(isVid && f.size>45*1024*1024){ toast("Video too large — keep clips under 45 MB (about 30 seconds)"); return; }
+  if(isVid) toast("Uploading video…");
+  const dataUrl=await new Promise(r=>{ const fr=new FileReader(); fr.onload=()=>r(fr.result); fr.readAsDataURL(f); });
+  try{ const res=await api("/api/upload",{method:"POST",body:{dataUrl,name:f.name}}); window._photos.push(res.url); $("#thumbs").innerHTML+=mediaThumb(res.url); toast(isVid?"Video added":"Photo added"); }catch(e){ toast("Upload failed (offline?)"); } }
 
 /* signature pad */
 function renderSig(){ const w=$("#sigWrap"); if(!w)return; w.innerHTML=`<canvas class="sig" id="sig"></canvas><div class="row-actions"><button class="btn ghost sm" onclick="sigClear()">Clear</button><button class="btn ghost sm" onclick="sigSave()">Save signature</button><span id="sigState" style="align-self:center;color:var(--muted);font-size:13px">${JOB.stage4&&JOB.stage4.signature?'✓ signature on file':''}</span></div>`;
@@ -792,7 +803,7 @@ async function doLook(){ const no=$("#lk").value.trim(); const host=$("#lkr"); c
   }
   host.innerHTML=`<div class="card"><div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap"><h2 style="margin:0">${esc(j.jobNo)} ${statusPill(j.statusOverride||(c===0?'New':(c<FLOW.length?'In Progress':'Released')))}</h2><span class="tag-machine">${esc(mlabel(j.machine))}</span><div style="margin-left:auto" class="no-print"><button class="btn ghost sm" onclick="go('entry',{jobNo:'${jsq(j.jobNo)}'})">Edit</button> <button class="btn ghost sm" onclick="openAmend('${jsq(j.jobNo)}','${jsq(j.jobNo)}')">Amendments</button> <button class="btn gold sm" onclick="window.print()">📄 SQF PDF</button></div></div><p class="sub">${esc(j.product||'—')} · ${esc(j.customer||'')} · Created ${esc(j.created)} · ${c} of ${FLOW.length} complete</p>${sBox(1,"Printing",a._done,s1h)}${legacyBox}${sBox(2,"Sheeting / Slitting",e._done,s3h)}${sBox(3,"Finishing & Release",f._done,s4h)}<p class="sub" style="margin-top:10px">Golden Manufacturers Pte Ltd · QA in-process record · printed ${new Date().toLocaleString()}</p></div>`;
 }
-function photosView(s){ return (s.photos&&s.photos.length)?`<h4>Photos</h4><div class="thumbs">${s.photos.map(u=>`<img src="${esc(u)}">`).join("")}</div>`:""; }
+function photosView(s){ return (s.photos&&s.photos.length)?`<h4>Photos &amp; Videos</h4><div class="thumbs">${s.photos.map(mediaThumb).join("")}</div>`:""; }
 
 /* reports */
 async function reports(){
