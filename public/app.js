@@ -271,13 +271,103 @@ function render(){ const v=CUR.view;
   else if(v==="exec")execDashboard(); else if(v==="capa")capaPage(); else if(v==="ncr")ncrPage(); else if(v==="checklists")checklistsPage(); else if(v==="equip")equipmentPage(); else if(v==="spc")spcPage(); else if(v==="reports")reports(); else if(v==="suppliers")suppliersPage(); else if(v==="team")team(); else if(v==="audit")auditTrail(); else if(v==="integrations")integrationsPage(); else if(v==="templates")templatesPage(); else if(v==="settings")settings(); else if(v==="account")myAccount();
   else dashboard(); }
 
+/* ---------- generic list view: toolbar (search/filters) + sortable table + 10-row pager ----------
+   listView(cfg) renders into #<cfg.host>; per-view UI state lives in window._lv[key] so it survives
+   SPA re-renders (e.g. the flushQueue() re-render). cfg:
+     { key, host, rows, columns:[{label, sortVal?, thClass?}], rowHTML(item),
+       filters:[{id, label, type?:'select'|'date', options?|optionsFrom?, optionLabel?, match(item,v), onChange?}],
+       searchText(item)?, searchPlaceholder?, actionsHTML?, pageSize?, emptyText?, emptyFilterText?, toolbar? }
+   Keys, hosts and filter ids must be hardcoded literals (they are embedded in inline handlers);
+   every data-derived string rendered here goes through esc(). */
+window._lv = window._lv || {};
+function listView(cfg){
+  const prev=window._lv[cfg.key] && window._lv[cfg.key].state;
+  const state=Object.assign({q:"",filters:{},sort:-1,dir:1,page:0,size:cfg.pageSize||10}, prev||{});
+  window._lv[cfg.key]={cfg,state};
+  lvClean(cfg.key);
+  const host=document.getElementById(cfg.host||("lv_"+cfg.key)); if(!host)return;
+  host.innerHTML=`<div class="lv">${cfg.toolbar===false?'':lvToolbarHTML(cfg,state)}
+    <div class="table-wrap"><table><thead id="lvhead_${cfg.key}"></thead><tbody class="lv-off" id="lvpre_${cfg.key}"></tbody><tbody id="lvbody_${cfg.key}"></tbody><tbody class="lv-off" id="lvpost_${cfg.key}"></tbody></table></div>
+    <div class="empty hidden" id="lvempty_${cfg.key}" style="padding:18px"></div>
+    <div class="lv-pager no-print" id="lvpager_${cfg.key}"></div></div>`;
+  lvBody(cfg.key);
+}
+/* swap the data after a refetch without rebuilding the toolbar (keeps focus + filter DOM) */
+function lvData(key, rows){ const lv=window._lv[key]; if(!lv)return; lv.cfg.rows=rows; lvClean(key); lvBody(key); }
+function lvClean(key){ const {cfg,state}=window._lv[key];
+  (cfg.filters||[]).forEach(f=>{ const v=state.filters[f.id]; if(!v||f.type==='date')return;
+    if(!lvFilterOptions(cfg,f).includes(v)) delete state.filters[f.id]; });
+}
+function lvFilterOptions(cfg,f){ return f.options?f.options.slice():(f.optionsFrom?[...new Set((cfg.rows||[]).map(f.optionsFrom).filter(Boolean))].sort():[]); }
+function lvToolbarHTML(cfg,state){
+  const k=cfg.key;
+  const search=cfg.searchText?`<div class="field lv-qf"><label>Search</label><input value="${esc(state.q)}" placeholder="${esc(cfg.searchPlaceholder||'Search')}" oninput="lvQ('${k}',this.value)"></div>`:'';
+  const filters=(cfg.filters||[]).map(f=>{
+    if(f.type==='date') return `<div class="field"><label>${esc(f.label)}</label><input type="date" value="${esc(state.filters[f.id]||'')}" onchange="lvF('${k}','${f.id}',this.value)"></div>`;
+    const lab=f.optionLabel||(v=>v);
+    return `<div class="field"><label>${esc(f.label)}</label><select onchange="lvF('${k}','${f.id}',this.value)"><option value="">${esc(f.allLabel||'All')}</option>${lvFilterOptions(cfg,f).map(o=>`<option value="${esc(o)}" ${state.filters[f.id]===o?'selected':''}>${esc(lab(o))}</option>`).join("")}</select></div>`;
+  }).join("");
+  return `<div class="lv-toolbar no-print">${search}${filters}<button class="btn ghost sm lv-reset" onclick="lvReset('${k}')">Reset</button>${cfg.actionsHTML||''}<span class="lv-count" id="lvcount_${k}"></span></div>`;
+}
+/* filtered + sorted rows (the "current view" — the pager slices it, print shows all of it) */
+function lvRows(key){
+  const {cfg,state}=window._lv[key];
+  let list=(cfg.rows||[]).slice();
+  const q=(state.q||"").toLowerCase().trim();
+  if(q&&cfg.searchText) list=list.filter(it=>String(cfg.searchText(it)||"").toLowerCase().includes(q));
+  (cfg.filters||[]).forEach(f=>{ const v=state.filters[f.id]; if(v&&f.match) list=list.filter(it=>f.match(it,v)); });
+  const col=(cfg.columns||[])[state.sort];
+  if(col&&col.sortVal){ const d=state.dir; list.sort((a,b)=>lvCmp(col.sortVal(a),col.sortVal(b),d)); }
+  return list;
+}
+function lvCmp(a,b,dir){
+  const an=(a==null||a===""), bn=(b==null||b==="");
+  if(an&&bn)return 0; if(an)return 1; if(bn)return -1;   // empties last regardless of direction
+  const na=Number(a), nb=Number(b);
+  if(Number.isFinite(na)&&Number.isFinite(nb)) return (na-nb)*dir;
+  return String(a).localeCompare(String(b))*dir;
+}
+function lvBody(key){
+  const lv=window._lv[key]; if(!lv)return; const {cfg,state}=lv;
+  const list=lvRows(key);
+  const size=state.size==='all'?Math.max(list.length,1):(Number(state.size)||10);
+  const pages=Math.max(1,Math.ceil(list.length/size));
+  if(state.page>=pages)state.page=pages-1; if(state.page<0)state.page=0;
+  const start=state.page*size;
+  const pre=$("#lvpre_"+key); if(!pre)return;
+  pre.innerHTML=list.slice(0,start).map(cfg.rowHTML).join("");
+  $("#lvbody_"+key).innerHTML=list.slice(start,start+size).map(cfg.rowHTML).join("");
+  $("#lvpost_"+key).innerHTML=list.slice(start+size).map(cfg.rowHTML).join("");
+  $("#lvhead_"+key).innerHTML=`<tr>${(cfg.columns||[]).map((c,i)=>{
+    const sortable=!!c.sortVal, on=state.sort===i;
+    return `<th class="${c.thClass||''}${sortable?' sortable':''}${on?' on':''}" ${sortable?`onclick="lvSort('${key}',${i})"`:''}>${esc(c.label||'')}${sortable?`<span class="dir">${on?(state.dir>0?'▲':'▼'):'↕'}</span>`:''}</th>`;
+  }).join("")}</tr>`;
+  const em=$("#lvempty_"+key);
+  em.textContent=(cfg.rows||[]).length?(cfg.emptyFilterText||'No rows match the filter.'):(cfg.emptyText||'Nothing here yet.');
+  em.classList.toggle("hidden",!!list.length);
+  const filtered=(cfg.rows||[]).length!==list.length;
+  const pager=$("#lvpager_"+key);
+  pager.innerHTML=(list.length>10||state.page>0||String(state.size)!=='10')?`
+    <span class="pg">${list.length} item${list.length===1?'':'s'}${filtered?' (of '+(cfg.rows||[]).length+')':''} · Page ${state.page+1} of ${pages}</span>
+    <button class="btn ghost sm" ${state.page<=0?'disabled':''} onclick="lvPage('${key}',${state.page-1})">‹ Prev</button>
+    <button class="btn ghost sm" ${state.page>=pages-1?'disabled':''} onclick="lvPage('${key}',${state.page+1})">Next ›</button>
+    <select onchange="lvSize('${key}',this.value)">${[10,25,50,'all'].map(s=>`<option value="${s}" ${String(state.size)===String(s)?'selected':''}>${s==='all'?'All':s+' / page'}</option>`).join("")}</select>`:'';
+  const cnt=$("#lvcount_"+key);
+  if(cnt)cnt.textContent=list.length+(list.length===1?' item':' items')+(filtered?' of '+(cfg.rows||[]).length:'');
+}
+function lvQ(key,v){ const lv=window._lv[key]; if(!lv)return; lv.state.q=v; lv.state.page=0; lvBody(key); }
+function lvF(key,fid,v){ const lv=window._lv[key]; if(!lv)return; if(v)lv.state.filters[fid]=v; else delete lv.state.filters[fid]; lv.state.page=0;
+  lvBody(key); const f=(lv.cfg.filters||[]).find(x=>x.id===fid); if(f&&f.onChange)f.onChange(v); }
+function lvSort(key,i){ const lv=window._lv[key]; if(!lv)return; const s=lv.state; if(s.sort===i)s.dir=-s.dir; else{s.sort=i;s.dir=1;} lvBody(key); }
+function lvPage(key,p){ const lv=window._lv[key]; if(!lv)return; lv.state.page=p; lvBody(key); }
+function lvSize(key,v){ const lv=window._lv[key]; if(!lv)return; lv.state.size=(v==='all')?'all':(Number(v)||10); lv.state.page=0; lvBody(key); }
+function lvReset(key){ const lv=window._lv[key]; if(!lv)return; Object.assign(lv.state,{q:"",filters:{},sort:-1,dir:1,page:0,size:lv.cfg.pageSize||10}); listView(lv.cfg); }
+
 /* ---------- dashboard ---------- */
 async function dashboard(){
   app().innerHTML=`<div class="empty">Loading…</div>`;
   let jobs; try{ jobs=await api("/api/jobs"); }catch(e){ app().innerHTML=`<div class="card"><div class="empty">Could not load jobs — ${esc(e.message)}</div></div>`; return; }
-  window._dashJobs=jobs;
   const cnt=s=>jobs.filter(j=>j.status===s).length;
-  const machineOpts=[...new Set(jobs.map(j=>j.machine))].map(m=>`<option value="${esc(m)}">${esc(mlabel(m))}</option>`).join("");
   app().innerHTML=`
     <div class="stats">
       <div class="stat"><div class="n">${jobs.length}</div><div class="l">Total Jobs</div></div>
@@ -286,15 +376,19 @@ async function dashboard(){
       <div class="stat"><div class="n">${cnt('Hold')+cnt('Rejected')}</div><div class="l">Hold / Reject</div></div>
     </div>
     <div class="card"><h2>Active &amp; Recent Jobs</h2><p class="sub">Each Starkist job tracked through all three stages by one Job #.</p>
-    <div class="grid g4 no-print" style="margin-bottom:14px">
-      <div class="field"><label>Search</label><input id="dq" placeholder="Job #, product, customer" oninput="renderJobRows()"></div>
-      <div class="field"><label>Status</label><select id="dstatus" onchange="renderJobRows()"><option value="">All statuses</option><option>New</option><option>In Progress</option><option>Released</option><option>Hold</option><option>Rejected</option></select></div>
-      <div class="field"><label>Machine</label><select id="dmachine" onchange="renderJobRows()"><option value="">All machines</option>${machineOpts}</select></div>
-      <div class="field"><label>Export</label><button class="btn ghost" onclick="exportCsv()">⤓ Export CSV</button></div>
-    </div>
-    ${jobs.length?`<div style="overflow-x:auto"><table><thead><tr><th>Job #</th><th>Product</th><th>Machine</th><th>Progress</th><th>Status</th><th></th></tr></thead><tbody id="jobtbody"></tbody></table></div><div class="empty hidden" id="jobempty" style="padding:18px">No jobs match the filter.</div>`:`<div class="empty">No jobs yet.</div>`}
+    <div id="lv_dashjobs"></div>
     <div class="row-actions"><button class="btn gold" onclick="go('new')">+ New Job</button><button class="btn ghost" onclick="go('lookup')">Look up a Job #</button></div></div>`;
-  if(jobs.length) renderJobRows();
+  listView({ key:'dashjobs', rows:jobs,
+    columns:[ {label:'Job #',sortVal:j=>j.jobNo}, {label:'Product',sortVal:j=>j.product||''}, {label:'Machine',sortVal:j=>mlabel(j.machine)},
+      {label:'Progress',sortVal:j=>j.completed||0}, {label:'Status',sortVal:j=>j.status}, {label:''} ],
+    rowHTML:jobRow,
+    searchText:j=>(j.jobNo||'')+' '+(j.product||'')+' '+(j.customer||''), searchPlaceholder:'Job #, product, customer',
+    filters:[
+      {id:'status',label:'Status',options:['New','In Progress','Released','Hold','Rejected'],match:(j,v)=>j.status===v},
+      {id:'machine',label:'Machine',optionsFrom:j=>j.machine,optionLabel:m=>mlabel(m),match:(j,v)=>j.machine===v}
+    ],
+    actionsHTML:`<button class="btn ghost sm" onclick="exportCsv()">⤓ Export CSV</button>`,
+    emptyText:'No jobs yet.', emptyFilterText:'No jobs match the filter.' });
 }
 function jobRow(j){
   const comp=Math.min(j.completed||0, STAGES.length); // stale caches may still report the old 4-stage count
@@ -303,15 +397,6 @@ function jobRow(j){
     <td><span class="tag-machine">${esc(mlabel(j.machine))}</span></td>
     <td style="min-width:150px"><div class="progress">${segs}</div><div style="font-size:12px;color:var(--muted)">${comp} of ${STAGES.length}</div></td>
     <td>${statusPill(j.status)}</td><td><button class="btn ghost sm" onclick="go('entry',{jobNo:'${jsq(j.jobNo)}'})">Open</button></td></tr>`;
-}
-function renderJobRows(){
-  const q=(val("dq")||"").toLowerCase().trim(), st=val("dstatus"), mc=val("dmachine");
-  let list=(window._dashJobs||[]);
-  if(q) list=list.filter(j=>((j.jobNo||"")+" "+(j.product||"")+" "+(j.customer||"")).toLowerCase().includes(q));
-  if(st) list=list.filter(j=>j.status===st);
-  if(mc) list=list.filter(j=>j.machine===mc);
-  const tb=$("#jobtbody"); if(!tb)return; tb.innerHTML=list.map(jobRow).join("");
-  const e=$("#jobempty"); if(e)e.classList.toggle("hidden",!!list.length);
 }
 async function exportCsv(){
   try{ const r=await fetch("/api/export/jobs.csv",{headers:hdrs()}); if(!r.ok) throw new Error("HTTP "+r.status);
