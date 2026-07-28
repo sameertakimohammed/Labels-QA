@@ -253,8 +253,10 @@ All endpoints are under `/api`. Auth: `x-token: <session>` (login) or `x-api-key
 | `PUT /api/jobs/:no/stage/:n` | Save/complete a stage | authed (+competency) |
 | `POST /api/jobs/:no/hold` | Place on hold | Supervisor |
 | `POST /api/upload` | Photo/signature upload | authed |
-| `GET/POST/PUT /api/capas[/:id]` | CAPA list/create/update | view: authed · write: Supervisor |
-| `GET/POST/PUT /api/ncrs[/:id]` · `POST /api/ncrs/:id/capa` | NCR + promote | view: authed · write: Supervisor |
+| `GET/POST/PUT /api/capas[/:id]` | CAPA list/create/update (`GET ?archived=1` lists archived) | view: authed · write: Supervisor |
+| `DELETE /api/capas/:id` · `POST /api/capas/:id/restore` | Archive (hide, keep record) · restore | Supervisor |
+| `GET/POST/PUT /api/ncrs[/:id]` · `POST /api/ncrs/:id/capa` | NCR + promote (`GET ?archived=1` lists archived) | view: authed · write: Supervisor |
+| `DELETE /api/ncrs/:id` · `POST /api/ncrs/:id/restore` | Archive (hide, keep record) · restore | Supervisor |
 | `GET/POST/PUT /api/equipment[/:id]` · `POST /api/equipment/:id/calibrate` | Equipment + calibrate (`GET ?archived=1` lists archived) | view: authed · write: Supervisor |
 | `DELETE /api/equipment/:id` · `POST /api/equipment/:id/restore` | Archive (hide, keep history) · restore | Supervisor |
 | `GET /api/equipment/:id/history` · `GET /api/equipment/calibration-history.csv` | Calibration history + CSV extract (archived items included) | authed |

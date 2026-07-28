@@ -1120,7 +1120,9 @@ async function api(req, res, url) {
   }
 
   if (seg[0]==='capas' && method==='GET' && !seg[1]) {
-    let list = (DB.capas||[]).slice();
+    // Archived CAPAs are hidden by default; ?archived=1 lists only them.
+    const arch=url.searchParams.get('archived')==='1';
+    let list = (DB.capas||[]).filter(c=>arch?c.archived:!c.archived);
     const fs_=url.searchParams.get('status'); if(fs_) list=list.filter(c=>c.status===fs_);
     const fj=url.searchParams.get('jobNo'); if(fj) list=list.filter(c=>String(c.jobNo||'').toLowerCase()===fj.toLowerCase());
     return send(res,200, list.reverse());
@@ -1141,6 +1143,7 @@ async function api(req, res, url) {
   if (seg[0]==='capas' && seg[1] && method==='PUT') {
     if(!isManager(user)) return send(res,403,{error:'Only a Supervisor, Quality Manager or Administrator can update a CAPA'});
     const c=(DB.capas||[]).find(x=>x.id===decodeURIComponent(seg[1])); if(!c) return send(res,404,{error:'CAPA not found'});
+    if(c.archived) return send(res,409,{error:'CAPA is archived — restore it first'});
     const b=await readBody(req);
     if(typeof b.dueDate==='string' && b.dueDate.trim() && !isValidYmd(b.dueDate.trim())) return send(res,400,{error:'Due date must be a valid YYYY-MM-DD date'});
     const cBefore=JSON.parse(JSON.stringify(c));
@@ -1163,9 +1166,30 @@ async function api(req, res, url) {
     c.updatedAt=new Date().toISOString();
     audit(user, c.status==='Closed'?'capa-close':'capa-update', { recordType:'capa', recordId:c.id, jobNo:c.jobNo, detail:c.id, changes:auditDiff(cBefore, c) }); saveDB(); return send(res,200,c);
   }
+  // DELETE = archive, not removal: the CAPA record stays (workbook export and audit trail keep it)
+  // but it leaves the list, the KPIs and SLA escalation until restored.
+  if (seg[0]==='capas' && seg[1] && !seg[2] && method==='DELETE') {
+    if(!isManager(user)) return send(res,403,{error:'Only a Supervisor, Quality Manager or Administrator can delete a CAPA'});
+    const c=(DB.capas||[]).find(x=>x.id===decodeURIComponent(seg[1])); if(!c) return send(res,404,{error:'CAPA not found'});
+    if(c.archived) return send(res,409,{error:'CAPA is already archived'});
+    const cBefore=JSON.parse(JSON.stringify(c));
+    c.archived=true; c.archivedAt=new Date().toISOString(); c.archivedBy=user.id; c.updatedAt=c.archivedAt;
+    audit(user,'capa-archive',{ recordType:'capa', recordId:c.id, jobNo:c.jobNo, detail:c.id+': '+c.title, changes:auditDiff(cBefore, c) });
+    saveDB(); return send(res,200,{ ok:true });
+  }
+  if (seg[0]==='capas' && seg[1] && seg[2]==='restore' && method==='POST') {
+    if(!isManager(user)) return send(res,403,{error:'Only a Supervisor, Quality Manager or Administrator can restore a CAPA'});
+    const c=(DB.capas||[]).find(x=>x.id===decodeURIComponent(seg[1])); if(!c) return send(res,404,{error:'CAPA not found'});
+    if(!c.archived) return send(res,409,{error:'CAPA is not archived'});
+    const cBefore=JSON.parse(JSON.stringify(c));
+    delete c.archived; delete c.archivedAt; delete c.archivedBy; c.updatedAt=new Date().toISOString();
+    audit(user,'capa-restore',{ recordType:'capa', recordId:c.id, jobNo:c.jobNo, detail:c.id+': '+c.title, changes:auditDiff(cBefore, c) });
+    saveDB(); return send(res,200,{ ok:true });
+  }
 
   if (seg[0]==='ncrs' && method==='GET' && !seg[1]) {
-    let list=(DB.ncrs||[]).slice();
+    const arch=url.searchParams.get('archived')==='1';
+    let list=(DB.ncrs||[]).filter(x=>arch?x.archived:!x.archived);
     const fs_=url.searchParams.get('status'); if(fs_) list=list.filter(x=>x.status===fs_);
     const fj=url.searchParams.get('jobNo'); if(fj) list=list.filter(x=>String(x.jobNo||'').toLowerCase()===fj.toLowerCase());
     return send(res,200, list.reverse());
@@ -1182,6 +1206,7 @@ async function api(req, res, url) {
   if (seg[0]==='ncrs' && seg[1] && seg[2]==='capa' && method==='POST') {
     if(!isManager(user)) return send(res,403,{error:'Not permitted'});
     const x=(DB.ncrs||[]).find(y=>y.id===decodeURIComponent(seg[1])); if(!x) return send(res,404,{error:'NCR not found'});
+    if(x.archived) return send(res,409,{error:'NCR is archived — restore it first'});
     if(x.capaId) return send(res,409,{error:'This NCR already has a linked CAPA ('+x.capaId+')'});
     const now=new Date().toISOString();
     const c={ id:genId('CAPA'), jobNo:x.jobNo, title:'NCR '+x.id+': '+x.description.slice(0,80), source:'NCR '+x.id, severity:x.severity, status:'Open',
@@ -1192,6 +1217,7 @@ async function api(req, res, url) {
   if (seg[0]==='ncrs' && seg[1] && method==='PUT') {
     if(!isManager(user)) return send(res,403,{error:'Not permitted'});
     const x=(DB.ncrs||[]).find(y=>y.id===decodeURIComponent(seg[1])); if(!x) return send(res,404,{error:'NCR not found'});
+    if(x.archived) return send(res,409,{error:'NCR is archived — restore it first'});
     const b=await readBody(req);
     const xBefore=JSON.parse(JSON.stringify(x));
     ['jobNo','date','description'].forEach(k=>{ if(typeof b[k]==='string') x[k]=b[k]; });
@@ -1199,6 +1225,25 @@ async function api(req, res, url) {
     if(b.severity && CAPA_SEVERITY.includes(b.severity)) x.severity=b.severity;
     if(b.status && NCR_STATUS.includes(b.status)){ const wasClosed=x.status==='Closed'; x.status=b.status; if(x.status==='Closed'&&!wasClosed){ x.closedBy=user.id; x.closedAt=new Date().toISOString(); } if(x.status!=='Closed'){ x.closedBy=''; x.closedAt=''; } }
     audit(user,'ncr-update',{ recordType:'ncr', recordId:x.id, jobNo:x.jobNo, detail:x.id, changes:auditDiff(xBefore, x) }); saveDB(); return send(res,200,x);
+  }
+  // DELETE = archive, mirroring CAPA/equipment: hidden until restored, record and audit trail kept.
+  if (seg[0]==='ncrs' && seg[1] && !seg[2] && method==='DELETE') {
+    if(!isManager(user)) return send(res,403,{error:'Only a Supervisor, Quality Manager or Administrator can delete an NCR'});
+    const x=(DB.ncrs||[]).find(y=>y.id===decodeURIComponent(seg[1])); if(!x) return send(res,404,{error:'NCR not found'});
+    if(x.archived) return send(res,409,{error:'NCR is already archived'});
+    const xBefore=JSON.parse(JSON.stringify(x));
+    x.archived=true; x.archivedAt=new Date().toISOString(); x.archivedBy=user.id;
+    audit(user,'ncr-archive',{ recordType:'ncr', recordId:x.id, jobNo:x.jobNo, detail:x.id, changes:auditDiff(xBefore, x) });
+    saveDB(); return send(res,200,{ ok:true });
+  }
+  if (seg[0]==='ncrs' && seg[1] && seg[2]==='restore' && method==='POST') {
+    if(!isManager(user)) return send(res,403,{error:'Only a Supervisor, Quality Manager or Administrator can restore an NCR'});
+    const x=(DB.ncrs||[]).find(y=>y.id===decodeURIComponent(seg[1])); if(!x) return send(res,404,{error:'NCR not found'});
+    if(!x.archived) return send(res,409,{error:'NCR is not archived'});
+    const xBefore=JSON.parse(JSON.stringify(x));
+    delete x.archived; delete x.archivedAt; delete x.archivedBy;
+    audit(user,'ncr-restore',{ recordType:'ncr', recordId:x.id, jobNo:x.jobNo, detail:x.id, changes:auditDiff(xBefore, x) });
+    saveDB(); return send(res,200,{ ok:true });
   }
 
   if (seg[0]==='equipment' && method==='GET' && !seg[1]) {
@@ -1480,7 +1525,7 @@ function analytics(opts){
   const dispositioned = released + rejectedJobs;
   const fpy = dispositioned ? Math.round((released/dispositioned)*100) : 100;
   const trend = Object.values(trendMap).sort((a,b)=> a.date<b.date?-1:1);
-  const openCapas = (DB.capas||[]).filter(c=>c.status!=='Closed').length;
+  const openCapas = (DB.capas||[]).filter(c=>!c.archived && c.status!=='Closed').length;
   return { defects, wasteByMachine, downtime, trend, range:{from,to,shift}, kpis:{ total, released, rejectedJobs, dispositioned, firstPassYield:fpy, openCapas } };
 }
 
@@ -1489,7 +1534,7 @@ function exec(){
   const a=analytics();
   const t=Object.assign({ fpyMin:95, openCapasMax:5, overdueCalMax:0, holdRejectMax:2 }, (DB.masterdata&&DB.masterdata.targets)||{});
   const today=todayYmd();
-  const openCapas=(DB.capas||[]).filter(c=>c.status!=='Closed');
+  const openCapas=(DB.capas||[]).filter(c=>!c.archived && c.status!=='Closed');
   const overdueCapas=openCapas.filter(c=>c.dueDate&&c.dueDate<today).map(c=>({ id:c.id, jobNo:c.jobNo, title:c.title, dueDate:c.dueDate, owner:c.owner, severity:c.severity }));
   const equip=(DB.equipment||[]).filter(e=>e.active!==false && !e.archived).map(equipView);
   const overdueCal=equip.filter(e=>e.calStatus==='Overdue').map(e=>({ id:e.id, name:e.name, nextDue:e.nextDue, days:e.daysToDue }));
@@ -1513,7 +1558,7 @@ function metricsText(){
   const a=analytics(); const today=todayYmd();
   const eq=(DB.equipment||[]).filter(x=>x.active!==false && !x.archived).map(equipView);
   const overdueCal=eq.filter(x=>x.calStatus==='Overdue').length;
-  const openCapas=(DB.capas||[]).filter(c=>c.status!=='Closed'); const overdueCapas=openCapas.filter(c=>c.dueDate&&c.dueDate<today).length;
+  const openCapas=(DB.capas||[]).filter(c=>!c.archived && c.status!=='Closed'); const overdueCapas=openCapas.filter(c=>c.dueDate&&c.dueDate<today).length;
   const out=[]; const add=(name,help,type,val)=>{ out.push('# HELP '+name+' '+help, '# TYPE '+name+' '+type, name+' '+val); };
   add('gqa_jobs_total','Total jobs','gauge',a.kpis.total);
   add('gqa_jobs_released','Released jobs','gauge',a.kpis.released);
@@ -1626,7 +1671,7 @@ function maybeSendScheduledReport(){
 function checkCapaSla(){
   try{
     const today=todayYmd(); let changed=false; const newly=[];
-    (DB.capas||[]).forEach(c=>{ if(c.status!=='Closed' && c.dueDate && c.dueDate<today && !c.escalated){ c.escalated=true; c.escalatedAt=new Date().toISOString(); changed=true; newly.push(c); audit(null,'capa-escalate',c.jobNo,c.id+' overdue (due '+c.dueDate+')'); } });
+    (DB.capas||[]).forEach(c=>{ if(!c.archived && c.status!=='Closed' && c.dueDate && c.dueDate<today && !c.escalated){ c.escalated=true; c.escalatedAt=new Date().toISOString(); changed=true; newly.push(c); audit(null,'capa-escalate',c.jobNo,c.id+' overdue (due '+c.dueDate+')'); } });
     if(newly.length) alertAll('Golden QA — '+newly.length+' CAPA(s) overdue', newly.map(c=>c.id+' — '+c.title+' (due '+c.dueDate+(c.owner?', owner '+c.owner:'')+')').join('\n'));
     if(changed) saveDB();
   }catch(e){ console.warn('CAPA SLA check failed:', e && e.message); }
@@ -1664,7 +1709,7 @@ function buildDigest(){
   const holds=DB.jobs.filter(j=>{ const s=jobStatus(j); return s==='Hold'||s==='Rejected'; }).map(j=>({ jobNo:j.jobNo, status:jobStatus(j), product:j.product }));
   const inProgress=DB.jobs.filter(j=>jobStatus(j)==='In Progress').length;
   const topDefects=Object.entries(a.defects).sort((x,y)=>y[1]-x[1]).slice(0,5).map(([k,v])=>({ defect:k, kg:Math.round(v*100)/100 }));
-  const overdueCapas=(DB.capas||[]).filter(c=>c.status!=='Closed'&&c.dueDate&&c.dueDate<today).map(c=>({ id:c.id, title:c.title, dueDate:c.dueDate }));
+  const overdueCapas=(DB.capas||[]).filter(c=>!c.archived&&c.status!=='Closed'&&c.dueDate&&c.dueDate<today).map(c=>({ id:c.id, title:c.title, dueDate:c.dueDate }));
   const overdueCal=(DB.equipment||[]).filter(e=>e.active!==false && !e.archived).map(equipView).filter(e=>e.calStatus==='Overdue').map(e=>({ id:e.id, name:e.name, nextDue:e.nextDue }));
   return { org:CFG.orgName, generated:new Date().toISOString(), kpis:a.kpis, inProgress, holds, topDefects, overdueCapas, overdueCal };
 }

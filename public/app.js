@@ -764,7 +764,7 @@ async function capaPage(){
   const canManage=isMgrRole();
   app().innerHTML=`<div class="empty">Loading…</div>`;
   let capas=[]; try{ capas=await api("/api/capas"); }catch(e){ app().innerHTML=`<div class="card"><div class="empty">Could not load CAPAs — ${esc(e.message)}</div></div>`; return; }
-  window._capas=capas;
+  window._capas=capas; window._capasArchived=null;
   const open=capas.filter(c=>c.status!=='Closed').length;
   app().innerHTML=`<div class="card"><div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
       <div><h2 style="margin:0">CAPA — Corrective &amp; Preventive Actions</h2><p class="sub" style="margin:4px 0 0">Track and close quality events. ${open} open of ${capas.length}.</p></div>
@@ -777,17 +777,45 @@ async function capaPage(){
     rowHTML:capaRow,
     searchText:c=>(c.jobNo||'')+' '+(c.title||'')+' '+(c.owner||''), searchPlaceholder:'Job #, title, owner',
     filters:[
-      {id:'status',label:'Status',options:['Open','In Progress','Closed'],match:(c,v)=>c.status===v},
+      {id:'status',label:'Status',options:['Open','In Progress','Closed'].concat(canManage?['Archived']:[]),
+        match:(c,v)=>v==='Archived'?true:c.status===v, onChange:capaStatusFilter},
       {id:'severity',label:'Severity',options:['Low','Medium','High','Critical'],match:(c,v)=>c.severity===v}
     ],
     emptyText:'No CAPAs yet.'+(canManage?' Raise one when a job is held or a defect recurs.':''),
     emptyFilterText:'No CAPAs match the filter.' });
+  if(window._lv.capas.state.filters.status==='Archived') capaStatusFilter('Archived');
 }
 const SEV_RANK={Low:0,Medium:1,High:2,Critical:3};
+async function capaStatusFilter(v){
+  if(v==='Archived'){
+    if(!window._capasArchived){
+      try{ window._capasArchived=await api("/api/capas?archived=1"); }
+      catch(e){ toast("Could not load archived CAPAs — "+e.message);
+        const lv=window._lv.capas; delete lv.state.filters.status; listView(lv.cfg); return; }
+    }
+    lvData('capas', window._capasArchived);
+  } else {
+    lvData('capas', window._capas||[]);
+  }
+}
 function capaRow(c){
   const canManage=isMgrRole(); const today=new Date().toISOString().slice(0,10);
-  const overdue=c.status!=='Closed'&&c.dueDate&&c.dueDate<today;
-  return `<tr><td><b>${esc(c.id)}</b></td><td>${c.jobNo?`<button class="btn ghost sm" onclick="go('lookup',{jobNo:'${jsq(c.jobNo)}'})">${esc(c.jobNo)}</button>`:'—'}</td><td>${esc(c.title)}</td><td>${capaSevPill(c.severity)}</td><td>${esc(c.owner||'—')}</td><td>${c.dueDate?(overdue?`<span class="flag bad">${esc(c.dueDate)} ⚠</span>`:esc(c.dueDate)):'—'}</td><td>${capaStatusPill(c.status)}</td><td class="no-print">${canManage?`<button class="btn ghost sm" onclick="capaModal('${jsq(c.id)}')">Open</button> <button class="btn ghost sm" onclick="openAmend('${jsq(c.id)}','${jsq(c.id)}')">Amendments</button>`:''}</td></tr>`;
+  const overdue=!c.archived&&c.status!=='Closed'&&c.dueDate&&c.dueDate<today;
+  const status=c.archived?'<span class="pill grey">Archived</span>':capaStatusPill(c.status);
+  const actions=c.archived
+    ?`<button class="btn gold sm" onclick="restoreCapa('${jsq(c.id)}')">Restore</button> <button class="btn ghost sm" onclick="openAmend('${jsq(c.id)}','${jsq(c.id)}')">Amendments</button>`
+    :`<button class="btn ghost sm" onclick="capaModal('${jsq(c.id)}')">Open</button> <button class="btn ghost sm" onclick="openAmend('${jsq(c.id)}','${jsq(c.id)}')">Amendments</button> <button class="btn danger sm" onclick="archiveCapa('${jsq(c.id)}')">Delete</button>`;
+  return `<tr><td><b>${esc(c.id)}</b></td><td>${c.jobNo?`<button class="btn ghost sm" onclick="go('lookup',{jobNo:'${jsq(c.jobNo)}'})">${esc(c.jobNo)}</button>`:'—'}</td><td>${esc(c.title)}</td><td>${capaSevPill(c.severity)}</td><td>${esc(c.owner||'—')}</td><td>${c.dueDate?(overdue?`<span class="flag bad">${esc(c.dueDate)} ⚠</span>`:esc(c.dueDate)):'—'}</td><td>${status}</td><td class="no-print">${canManage?actions:''}</td></tr>`;
+}
+/* "Delete" = archive: the CAPA stays in exports and the audit trail and can be restored from
+   the Status filter → Archived. */
+async function archiveCapa(id){
+  const c=(window._capas||[]).find(x=>x.id===id); if(!c)return;
+  if(!confirm(`Delete ${c.id} — ${c.title}?\n\nIt will be hidden from the list and KPIs; the record is kept and can be restored from Status → Archived.`)) return;
+  try{ await api("/api/capas/"+encodeURIComponent(id),{method:"DELETE"}); toast("CAPA archived"); capaPage(); }catch(err){ toast(err.message); }
+}
+async function restoreCapa(id){
+  try{ await api("/api/capas/"+encodeURIComponent(id)+"/restore",{method:"POST"}); toast("CAPA restored"); capaPage(); }catch(err){ toast(err.message); }
 }
 function capaModal(id, prefill){
   const c=id?(window._capas||[]).find(x=>x.id===id):null; const p=prefill||{};
@@ -831,7 +859,7 @@ async function ncrPage(){
   const canManage=isMgrRole();
   app().innerHTML=`<div class="empty">Loading…</div>`;
   let list=[]; try{ list=await api("/api/ncrs"); }catch(e){ app().innerHTML=`<div class="card"><div class="empty">Could not load NCRs — ${esc(e.message)}</div></div>`; return; }
-  window._ncrs=list;
+  window._ncrs=list; window._ncrsArchived=null;
   const open=list.filter(n=>n.status!=='Closed').length;
   app().innerHTML=`<div class="card"><div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
       <div><h2 style="margin:0">Non-Conformance Reports</h2><p class="sub" style="margin:4px 0 0">${open} open of ${list.length}. Promote an NCR to a CAPA to drive corrective action.</p></div>
@@ -844,15 +872,42 @@ async function ncrPage(){
     rowHTML:ncrRow,
     searchText:n=>(n.id||'')+' '+(n.jobNo||'')+' '+(n.description||''), searchPlaceholder:'NCR #, job, text',
     filters:[
-      {id:'status',label:'Status',options:['Open','Closed'],match:(n,v)=>n.status===v},
+      {id:'status',label:'Status',options:['Open','Closed'].concat(canManage?['Archived']:[]),
+        match:(n,v)=>v==='Archived'?true:n.status===v, onChange:ncrStatusFilter},
       {id:'severity',label:'Severity',options:['Low','Medium','High','Critical'],match:(n,v)=>n.severity===v}
     ],
     emptyText:'No NCRs yet.'+(canManage?' Raise one when an inspection finds a nonconformance.':''),
     emptyFilterText:'No NCRs match the filter.' });
+  if(window._lv.ncrs.state.filters.status==='Archived') ncrStatusFilter('Archived');
+}
+async function ncrStatusFilter(v){
+  if(v==='Archived'){
+    if(!window._ncrsArchived){
+      try{ window._ncrsArchived=await api("/api/ncrs?archived=1"); }
+      catch(e){ toast("Could not load archived NCRs — "+e.message);
+        const lv=window._lv.ncrs; delete lv.state.filters.status; listView(lv.cfg); return; }
+    }
+    lvData('ncrs', window._ncrsArchived);
+  } else {
+    lvData('ncrs', window._ncrs||[]);
+  }
 }
 function ncrRow(n){
   const canManage=isMgrRole();
-  return `<tr><td><b>${esc(n.id)}</b></td><td>${n.jobNo?`<button class="btn ghost sm" onclick="go('lookup',{jobNo:'${jsq(n.jobNo)}'})">${esc(n.jobNo)}</button>`:'—'}</td><td>${esc(n.date)}</td><td>${esc(n.description)}</td><td>${esc(n.disposition)}</td><td>${capaSevPill(n.severity)}</td><td>${n.capaId?`<button class="btn ghost sm" onclick="go('capa')">${esc(n.capaId)}</button>`:(canManage?`<button class="btn ghost sm" onclick="promoteNcr('${jsq(n.id)}')">Raise CAPA</button>`:'—')}</td><td>${ncrStatusPill(n.status)}</td><td class="no-print">${canManage?`<button class="btn ghost sm" onclick="ncrModal('${jsq(n.id)}')">Edit</button> <button class="btn ghost sm" onclick="openAmend('${jsq(n.id)}','${jsq(n.id)}')">Amendments</button>`:''}</td></tr>`;
+  const status=n.archived?'<span class="pill grey">Archived</span>':ncrStatusPill(n.status);
+  const actions=n.archived
+    ?`<button class="btn gold sm" onclick="restoreNcr('${jsq(n.id)}')">Restore</button> <button class="btn ghost sm" onclick="openAmend('${jsq(n.id)}','${jsq(n.id)}')">Amendments</button>`
+    :`<button class="btn ghost sm" onclick="ncrModal('${jsq(n.id)}')">Edit</button> <button class="btn ghost sm" onclick="openAmend('${jsq(n.id)}','${jsq(n.id)}')">Amendments</button> <button class="btn danger sm" onclick="archiveNcr('${jsq(n.id)}')">Delete</button>`;
+  const capaCell=n.capaId?`<button class="btn ghost sm" onclick="go('capa')">${esc(n.capaId)}</button>`:((canManage&&!n.archived)?`<button class="btn ghost sm" onclick="promoteNcr('${jsq(n.id)}')">Raise CAPA</button>`:'—');
+  return `<tr><td><b>${esc(n.id)}</b></td><td>${n.jobNo?`<button class="btn ghost sm" onclick="go('lookup',{jobNo:'${jsq(n.jobNo)}'})">${esc(n.jobNo)}</button>`:'—'}</td><td>${esc(n.date)}</td><td>${esc(n.description)}</td><td>${esc(n.disposition)}</td><td>${capaSevPill(n.severity)}</td><td>${capaCell}</td><td>${status}</td><td class="no-print">${canManage?actions:''}</td></tr>`;
+}
+async function archiveNcr(id){
+  const n=(window._ncrs||[]).find(x=>x.id===id); if(!n)return;
+  if(!confirm(`Delete ${n.id}?\n\nIt will be hidden from the list; the record is kept and can be restored from Status → Archived.`)) return;
+  try{ await api("/api/ncrs/"+encodeURIComponent(id),{method:"DELETE"}); toast("NCR archived"); ncrPage(); }catch(err){ toast(err.message); }
+}
+async function restoreNcr(id){
+  try{ await api("/api/ncrs/"+encodeURIComponent(id)+"/restore",{method:"POST"}); toast("NCR restored"); ncrPage(); }catch(err){ toast(err.message); }
 }
 function ncrModal(id){
   const n=id?(window._ncrs||[]).find(x=>x.id===id):null;
