@@ -249,7 +249,8 @@ All endpoints are under `/api`. Auth: `x-token: <session>` (login) or `x-api-key
 | `GET /api/me` · `POST /api/me/password` | Profile · change password | authed |
 | `GET /api/jobs` · `GET /api/jobs/:no` | List · fetch a job | authed |
 | `POST /api/jobs` · `POST /api/jobs/:no/clone` | Create · clone | authed |
-| `PUT /api/jobs/:no` · `DELETE /api/jobs/:no` | Edit metadata · delete | Supervisor · QM |
+| `PUT /api/jobs/:no` · `DELETE /api/jobs/:no` | Edit metadata · archive (hide, keep record; `GET /api/jobs?archived=1` lists archived) | Supervisor · QM |
+| `POST /api/jobs/:no/restore` | Restore an archived job | QM |
 | `PUT /api/jobs/:no/stage/:n` | Save/complete a stage | authed (+competency) |
 | `POST /api/jobs/:no/hold` | Place on hold | Supervisor |
 | `POST /api/upload` | Photo/signature upload | authed |

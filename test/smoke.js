@@ -209,11 +209,43 @@ async function main() {
     eq('POST /api/jobs/:jobNo/clone -> 200', r.status, 200);
     ok('clone has empty stage1', !!(r.body && r.body.stage1 && r.body.stage1._done === false), JSON.stringify(r.body && r.body.stage1));
 
-    // 10d. delete the clone
+    // 10d. delete the clone = archive (record + lookup survive; lists/KPIs exclude it; restorable)
+    r = await request('GET', '/api/analytics', undefined, adminToken);
+    const totalBeforeArchive = r.body && r.body.kpis && r.body.kpis.total;
+    const earlyOfficerTok = ((await request('POST', '/api/login', { username: 'akumar', password: 'kumar123' })).body || {}).token;
+    r = await request('DELETE', '/api/jobs/' + encodeURIComponent(CLONE), undefined, earlyOfficerTok);
+    eq('non-QM DELETE job -> 403', r.status, 403);
     r = await request('DELETE', '/api/jobs/' + encodeURIComponent(CLONE), undefined, adminToken);
-    eq('DELETE /api/jobs/:jobNo -> 200', r.status, 200);
+    eq('DELETE /api/jobs/:jobNo (archive) -> 200', r.status, 200);
     r = await request('GET', '/api/jobs/' + encodeURIComponent(CLONE), undefined, adminToken);
-    eq('deleted clone now 404', r.status, 404);
+    ok('archived job still fetchable by jobNo (lookup keeps working)', r.status === 200 && r.body.archived === true, JSON.stringify(r.body && { a: r.body.archived, by: r.body.archivedBy }));
+    r = await request('GET', '/api/jobs', undefined, adminToken);
+    ok('archived job hidden from default list', !(r.body || []).some((j) => j.jobNo === CLONE), CLONE);
+    r = await request('GET', '/api/jobs?archived=1', undefined, adminToken);
+    ok('archived job listed via ?archived=1 with flag', (r.body || []).some((j) => j.jobNo === CLONE && j.archived === true), JSON.stringify(r.body && r.body.length));
+    r = await request('GET', '/api/analytics', undefined, adminToken);
+    ok('archived job excluded from analytics totals', r.body.kpis.total === totalBeforeArchive - 1, 'before=' + totalBeforeArchive + ' after=' + r.body.kpis.total);
+    r = await request('PUT', '/api/jobs/' + encodeURIComponent(CLONE) + '/stage/1', { data: { note: 'x' } }, adminToken);
+    eq('stage save on archived job -> 409', r.status, 409);
+    r = await request('PUT', '/api/jobs/' + encodeURIComponent(CLONE), { product: 'nope' }, adminToken);
+    eq('edit archived job -> 409', r.status, 409);
+    r = await request('POST', '/api/jobs/' + encodeURIComponent(CLONE) + '/hold', { reason: 'x' }, adminToken);
+    eq('hold archived job -> 409', r.status, 409);
+    r = await request('POST', '/api/jobs', { jobNo: CLONE, machine: 'Flexo450' }, adminToken);
+    ok('creating a job with an archived jobNo -> 409 with archive hint', r.status === 409 && /archive/i.test((r.body || {}).error || ''), JSON.stringify(r.body));
+    r = await request('DELETE', '/api/jobs/' + encodeURIComponent(CLONE), undefined, adminToken);
+    eq('archive an archived job -> 409', r.status, 409);
+    r = await request('POST', '/api/jobs/' + encodeURIComponent(CLONE) + '/restore', undefined, earlyOfficerTok);
+    eq('non-QM restore job -> 403', r.status, 403);
+    r = await request('POST', '/api/jobs/' + encodeURIComponent(CLONE) + '/restore', undefined, adminToken);
+    eq('POST /api/jobs/:jobNo/restore -> 200', r.status, 200);
+    r = await request('GET', '/api/jobs', undefined, adminToken);
+    const restJob = (r.body || []).find((j) => j.jobNo === CLONE);
+    ok('restored job back in default list unarchived', !!restJob && !restJob.archived, JSON.stringify(restJob && { a: restJob.archived }));
+    r = await request('POST', '/api/jobs/' + encodeURIComponent(CLONE) + '/restore', undefined, adminToken);
+    eq('restore a non-archived job -> 409', r.status, 409);
+    // leave the clone archived so later list/count assertions see only the primary job
+    await request('DELETE', '/api/jobs/' + encodeURIComponent(CLONE), undefined, adminToken);
 
     // 10e. backups status endpoint
     r = await request('GET', '/api/admin/backups', undefined, adminToken);
