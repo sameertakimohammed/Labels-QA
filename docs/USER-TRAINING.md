@@ -42,7 +42,10 @@ Add photos of any defect. **Save Draft** anytime; **Save & Mark Complete** when 
 
 ### 1.3 Stage 2 — Sheeting / Slitting
 Record rolls produced, random quality checks, and down-time hours. Complete with the required
-fields (date, operator, start/finish).
+fields (date, operator, start/finish). In the **Quality in Process Checks** table, Print Quality
+(Pass/Fail), Varnish Position (Correct/Incorrect), Barcode Verification (Correct/Incorrect),
+Sheet Appearance (Flat / Curling up / Curling down) and Sheet Stack Quality (Straight/Leaning)
+are fixed drop-downs — pick the option that applies instead of typing "OK".
 
 ### 1.4 Stage 3 — Finishing & Release
 - Add an **hourly check** each hour — the warning banner tells you when the next is due.
