@@ -611,6 +611,43 @@ async function main() {
     if (wkId) await request('DELETE', '/api/checklist-defs/' + encodeURIComponent(wkId), undefined, adminToken);
     if (ahId) await request('DELETE', '/api/checklist-defs/' + encodeURIComponent(ahId), undefined, adminToken);
 
+    // 30e. Checklist submission archive (DELETE = soft archive; re-arms due status; restorable)
+    r = await request('POST', '/api/checklist-defs', { code: 'F-ARC1', title: 'Archive test daily', frequency: 'daily', items: [{ label: 'Thing done' }] }, adminToken);
+    const arcDef = r.body; const arcDefId = arcDef && arcDef.id;
+    const arcResp = (arcDef.items || []).map((it) => ({ itemKey: it.key, status: 'Yes' }));
+    r = await request('POST', '/api/checklists', { defKey: arcDefId, completedByName: 'Admin', responses: arcResp, status: 'Completed' }, adminToken);
+    eq('complete archive-test checklist -> 200', r.status, 200);
+    const arcChk = r.body && r.body.id;
+    r = await request('GET', '/api/checklists/due', undefined, adminToken);
+    ok('archive-test form done after completion', ((r.body || []).find((d) => d.code === 'F-ARC1') || {}).status === 'done', JSON.stringify((r.body || []).find((d) => d.code === 'F-ARC1')));
+    r = await request('DELETE', '/api/checklists/' + encodeURIComponent(arcChk), undefined, officerToken);
+    eq('non-manager DELETE checklist -> 403', r.status, 403);
+    r = await request('DELETE', '/api/checklists/' + encodeURIComponent(arcChk), undefined, adminToken);
+    eq('DELETE /api/checklists/:id (archive) -> 200', r.status, 200);
+    r = await request('GET', '/api/checklists', undefined, adminToken);
+    ok('archived checklist hidden from default list', !(r.body || []).some((c) => c.id === arcChk), arcChk);
+    r = await request('GET', '/api/checklists?archived=1', undefined, adminToken);
+    ok('archived checklist listed via ?archived=1', (r.body || []).some((c) => c.id === arcChk && c.archived === true && c.archivedBy === 'admin'), JSON.stringify(r.body && r.body.length));
+    r = await request('GET', '/api/checklists/due', undefined, adminToken);
+    ok('archiving the submission re-arms the form as due', ((r.body || []).find((d) => d.code === 'F-ARC1') || {}).status !== 'done', JSON.stringify((r.body || []).find((d) => d.code === 'F-ARC1')));
+    r = await request('GET', '/api/checklists/' + encodeURIComponent(arcChk), undefined, adminToken);
+    eq('GET archived checklist by id still 200 (View stays open)', r.status, 200);
+    r = await request('POST', '/api/checklists/' + encodeURIComponent(arcChk) + '/verify', {}, adminToken);
+    eq('verify archived checklist -> 409', r.status, 409);
+    r = await request('PUT', '/api/checklists/' + encodeURIComponent(arcChk), { comments: 'nope' }, adminToken);
+    eq('PUT archived checklist -> 409', r.status, 409);
+    r = await request('DELETE', '/api/checklists/' + encodeURIComponent(arcChk), undefined, adminToken);
+    eq('archive an archived checklist -> 409', r.status, 409);
+    r = await request('POST', '/api/checklists/' + encodeURIComponent(arcChk) + '/restore', undefined, officerToken);
+    eq('non-manager restore checklist -> 403', r.status, 403);
+    r = await request('POST', '/api/checklists/' + encodeURIComponent(arcChk) + '/restore', undefined, adminToken);
+    eq('POST /api/checklists/:id/restore -> 200', r.status, 200);
+    r = await request('GET', '/api/checklists/due', undefined, adminToken);
+    ok('restored submission counts as done again', ((r.body || []).find((d) => d.code === 'F-ARC1') || {}).status === 'done', JSON.stringify((r.body || []).find((d) => d.code === 'F-ARC1')));
+    r = await request('POST', '/api/checklists/' + encodeURIComponent(arcChk) + '/restore', undefined, adminToken);
+    eq('restore a non-archived checklist -> 409', r.status, 409);
+    if (arcDefId) await request('DELETE', '/api/checklist-defs/' + encodeURIComponent(arcDefId), undefined, adminToken);
+
     // 31. Calibration recording form + extractable history
     r = await request('GET', '/api/equipment', undefined, adminToken);
     const eq0 = (r.body || [])[0];

@@ -261,7 +261,8 @@ All endpoints are under `/api`. Auth: `x-token: <session>` (login) or `x-api-key
 | `DELETE /api/equipment/:id` · `POST /api/equipment/:id/restore` | Archive (hide, keep history) · restore | Supervisor |
 | `GET /api/equipment/:id/history` · `GET /api/equipment/calibration-history.csv` | Calibration history + CSV extract (archived items included) | authed |
 | `GET /api/checklist-defs` · `POST/PUT/DELETE /api/checklist-defs[/:id]` | Checklist form templates | view: authed · write: Supervisor |
-| `GET/POST /api/checklists[/:id]` · `PUT /api/checklists/:id` · `POST /api/checklists/:id/verify` | Checklist submissions · verify (2nd person) | authed · verify: Supervisor |
+| `GET/POST /api/checklists[/:id]` · `PUT /api/checklists/:id` · `POST /api/checklists/:id/verify` | Checklist submissions · verify (2nd person) (`GET ?archived=1` lists archived) | authed · verify: Supervisor |
+| `DELETE /api/checklists/:id` · `POST /api/checklists/:id/restore` | Archive (hide, keep record; re-arms due status) · restore | Supervisor |
 | `GET /api/checklists/due` | Per-form due status (daily before-noon / monthly month-end) | authed |
 | `GET /api/analytics` · `GET /api/spc` · `GET /api/suppliers` | Analytics / SPC / suppliers | authed |
 | `GET /api/exec` | Executive RAG summary | Supervisor |
