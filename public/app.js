@@ -750,24 +750,25 @@ async function capaPage(){
   app().innerHTML=`<div class="card"><div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
       <div><h2 style="margin:0">CAPA — Corrective &amp; Preventive Actions</h2><p class="sub" style="margin:4px 0 0">Track and close quality events. ${open} open of ${capas.length}.</p></div>
       <div style="margin-left:auto" class="no-print">${canManage?`<button class="btn gold" onclick="capaModal()">+ Raise CAPA</button>`:''}</div></div>
-    <div class="grid g3 no-print" style="margin:4px 0 14px">
-      <div class="field"><label>Status</label><select id="cq_status" onchange="renderCapaRows()"><option value="">All</option><option>Open</option><option>In Progress</option><option>Closed</option></select></div>
-      <div class="field"><label>Search</label><input id="cq_q" placeholder="Job #, title, owner" oninput="renderCapaRows()"></div>
-    </div>
-    ${capas.length?`<div style="overflow-x:auto"><table><thead><tr><th>CAPA</th><th>Job</th><th>Title</th><th>Severity</th><th>Owner</th><th>Due</th><th>Status</th>${canManage?'<th class="no-print"></th>':''}</tr></thead><tbody id="capabody"></tbody></table></div><div class="empty hidden" id="capaempty" style="padding:18px">No CAPAs match the filter.</div>`:`<div class="empty">No CAPAs yet.${canManage?' Raise one when a job is held or a defect recurs.':''}</div>`}</div>`;
-  if(capas.length) renderCapaRows();
+    <div id="lv_capas"></div></div>`;
+  listView({ key:'capas', rows:capas,
+    columns:[ {label:'CAPA',sortVal:c=>c.id}, {label:'Job',sortVal:c=>c.jobNo||''}, {label:'Title',sortVal:c=>c.title||''},
+      {label:'Severity',sortVal:c=>SEV_RANK[c.severity]!=null?SEV_RANK[c.severity]:''}, {label:'Owner',sortVal:c=>c.owner||''},
+      {label:'Due',sortVal:c=>c.dueDate||''}, {label:'Status',sortVal:c=>c.status}, {label:'',thClass:'no-print'} ],
+    rowHTML:capaRow,
+    searchText:c=>(c.jobNo||'')+' '+(c.title||'')+' '+(c.owner||''), searchPlaceholder:'Job #, title, owner',
+    filters:[
+      {id:'status',label:'Status',options:['Open','In Progress','Closed'],match:(c,v)=>c.status===v},
+      {id:'severity',label:'Severity',options:['Low','Medium','High','Critical'],match:(c,v)=>c.severity===v}
+    ],
+    emptyText:'No CAPAs yet.'+(canManage?' Raise one when a job is held or a defect recurs.':''),
+    emptyFilterText:'No CAPAs match the filter.' });
 }
-function renderCapaRows(){
+const SEV_RANK={Low:0,Medium:1,High:2,Critical:3};
+function capaRow(c){
   const canManage=isMgrRole(); const today=new Date().toISOString().slice(0,10);
-  const st=val("cq_status"), q=(val("cq_q")||"").toLowerCase().trim();
-  let list=(window._capas||[]);
-  if(st) list=list.filter(c=>c.status===st);
-  if(q) list=list.filter(c=>((c.jobNo||"")+" "+(c.title||"")+" "+(c.owner||"")).toLowerCase().includes(q));
-  const tb=$("#capabody"); if(!tb)return;
-  tb.innerHTML=list.map(c=>{ const overdue=c.status!=='Closed'&&c.dueDate&&c.dueDate<today;
-    return `<tr><td><b>${esc(c.id)}</b></td><td>${c.jobNo?`<button class="btn ghost sm" onclick="go('lookup',{jobNo:'${jsq(c.jobNo)}'})">${esc(c.jobNo)}</button>`:'—'}</td><td>${esc(c.title)}</td><td>${capaSevPill(c.severity)}</td><td>${esc(c.owner||'—')}</td><td>${c.dueDate?(overdue?`<span class="flag bad">${esc(c.dueDate)} ⚠</span>`:esc(c.dueDate)):'—'}</td><td>${capaStatusPill(c.status)}</td>${canManage?`<td class="no-print"><button class="btn ghost sm" onclick="capaModal('${jsq(c.id)}')">Open</button> <button class="btn ghost sm" onclick="openAmend('${jsq(c.id)}','${jsq(c.id)}')">Amendments</button></td>`:''}</tr>`;
-  }).join("");
-  const e=$("#capaempty"); if(e)e.classList.toggle("hidden",!!list.length);
+  const overdue=c.status!=='Closed'&&c.dueDate&&c.dueDate<today;
+  return `<tr><td><b>${esc(c.id)}</b></td><td>${c.jobNo?`<button class="btn ghost sm" onclick="go('lookup',{jobNo:'${jsq(c.jobNo)}'})">${esc(c.jobNo)}</button>`:'—'}</td><td>${esc(c.title)}</td><td>${capaSevPill(c.severity)}</td><td>${esc(c.owner||'—')}</td><td>${c.dueDate?(overdue?`<span class="flag bad">${esc(c.dueDate)} ⚠</span>`:esc(c.dueDate)):'—'}</td><td>${capaStatusPill(c.status)}</td><td class="no-print">${canManage?`<button class="btn ghost sm" onclick="capaModal('${jsq(c.id)}')">Open</button> <button class="btn ghost sm" onclick="openAmend('${jsq(c.id)}','${jsq(c.id)}')">Amendments</button>`:''}</td></tr>`;
 }
 function capaModal(id, prefill){
   const c=id?(window._capas||[]).find(x=>x.id===id):null; const p=prefill||{};
@@ -816,18 +817,23 @@ async function ncrPage(){
   app().innerHTML=`<div class="card"><div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
       <div><h2 style="margin:0">Non-Conformance Reports</h2><p class="sub" style="margin:4px 0 0">${open} open of ${list.length}. Promote an NCR to a CAPA to drive corrective action.</p></div>
       <div style="margin-left:auto" class="no-print">${canManage?`<button class="btn gold" onclick="ncrModal()">+ Raise NCR</button>`:''}</div></div>
-    <div class="grid g3 no-print" style="margin:4px 0 14px"><div class="field"><label>Status</label><select id="nc_status" onchange="renderNcrRows()"><option value="">All</option><option>Open</option><option>Closed</option></select></div><div class="field"><label>Search</label><input id="nc_q" placeholder="NCR #, job, text" oninput="renderNcrRows()"></div></div>
-    ${list.length?`<div style="overflow-x:auto"><table><thead><tr><th>NCR</th><th>Job</th><th>Date</th><th>Description</th><th>Disposition</th><th>Severity</th><th>CAPA</th><th>Status</th>${canManage?'<th class="no-print"></th>':''}</tr></thead><tbody id="ncbody"></tbody></table></div><div class="empty hidden" id="ncempty" style="padding:18px">No NCRs match the filter.</div>`:`<div class="empty">No NCRs yet.${canManage?' Raise one when an inspection finds a nonconformance.':''}</div>`}</div>`;
-  if(list.length) renderNcrRows();
+    <div id="lv_ncrs"></div></div>`;
+  listView({ key:'ncrs', rows:list,
+    columns:[ {label:'NCR',sortVal:n=>n.id}, {label:'Job',sortVal:n=>n.jobNo||''}, {label:'Date',sortVal:n=>n.date||''}, {label:'Description'},
+      {label:'Disposition',sortVal:n=>n.disposition||''}, {label:'Severity',sortVal:n=>SEV_RANK[n.severity]!=null?SEV_RANK[n.severity]:''},
+      {label:'CAPA',sortVal:n=>n.capaId||''}, {label:'Status',sortVal:n=>n.status}, {label:'',thClass:'no-print'} ],
+    rowHTML:ncrRow,
+    searchText:n=>(n.id||'')+' '+(n.jobNo||'')+' '+(n.description||''), searchPlaceholder:'NCR #, job, text',
+    filters:[
+      {id:'status',label:'Status',options:['Open','Closed'],match:(n,v)=>n.status===v},
+      {id:'severity',label:'Severity',options:['Low','Medium','High','Critical'],match:(n,v)=>n.severity===v}
+    ],
+    emptyText:'No NCRs yet.'+(canManage?' Raise one when an inspection finds a nonconformance.':''),
+    emptyFilterText:'No NCRs match the filter.' });
 }
-function renderNcrRows(){
-  const canManage=isMgrRole(); const st=val("nc_status"), q=(val("nc_q")||"").toLowerCase().trim();
-  let list=(window._ncrs||[]);
-  if(st) list=list.filter(n=>n.status===st);
-  if(q) list=list.filter(n=>((n.id||"")+" "+(n.jobNo||"")+" "+(n.description||"")).toLowerCase().includes(q));
-  const tb=$("#ncbody"); if(!tb)return;
-  tb.innerHTML=list.map(n=>`<tr><td><b>${esc(n.id)}</b></td><td>${n.jobNo?`<button class="btn ghost sm" onclick="go('lookup',{jobNo:'${jsq(n.jobNo)}'})">${esc(n.jobNo)}</button>`:'—'}</td><td>${esc(n.date)}</td><td>${esc(n.description)}</td><td>${esc(n.disposition)}</td><td>${capaSevPill(n.severity)}</td><td>${n.capaId?`<button class="btn ghost sm" onclick="go('capa')">${esc(n.capaId)}</button>`:(canManage?`<button class="btn ghost sm" onclick="promoteNcr('${jsq(n.id)}')">Raise CAPA</button>`:'—')}</td><td>${ncrStatusPill(n.status)}</td>${canManage?`<td class="no-print"><button class="btn ghost sm" onclick="ncrModal('${jsq(n.id)}')">Edit</button> <button class="btn ghost sm" onclick="openAmend('${jsq(n.id)}','${jsq(n.id)}')">Amendments</button></td>`:''}</tr>`).join("");
-  const e=$("#ncempty"); if(e)e.classList.toggle("hidden",!!list.length);
+function ncrRow(n){
+  const canManage=isMgrRole();
+  return `<tr><td><b>${esc(n.id)}</b></td><td>${n.jobNo?`<button class="btn ghost sm" onclick="go('lookup',{jobNo:'${jsq(n.jobNo)}'})">${esc(n.jobNo)}</button>`:'—'}</td><td>${esc(n.date)}</td><td>${esc(n.description)}</td><td>${esc(n.disposition)}</td><td>${capaSevPill(n.severity)}</td><td>${n.capaId?`<button class="btn ghost sm" onclick="go('capa')">${esc(n.capaId)}</button>`:(canManage?`<button class="btn ghost sm" onclick="promoteNcr('${jsq(n.id)}')">Raise CAPA</button>`:'—')}</td><td>${ncrStatusPill(n.status)}</td><td class="no-print">${canManage?`<button class="btn ghost sm" onclick="ncrModal('${jsq(n.id)}')">Edit</button> <button class="btn ghost sm" onclick="openAmend('${jsq(n.id)}','${jsq(n.id)}')">Amendments</button>`:''}</td></tr>`;
 }
 function ncrModal(id){
   const n=id?(window._ncrs||[]).find(x=>x.id===id):null;
@@ -858,39 +864,48 @@ async function equipmentPage(){
   app().innerHTML=`<div class="card"><div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
       <div><h2 style="margin:0">Equipment &amp; Calibration</h2><p class="sub" style="margin:4px 0 0">${list.length} items · ${overdue} overdue · ${dueSoon} due soon.</p></div>
       <div style="margin-left:auto" class="no-print"><button class="btn ghost" onclick="dlAuth('/api/equipment/calibration-history.csv','golden-qa-calibration-history.csv')">⤓ Calibration history (CSV)</button> ${canManage?`<button class="btn gold" onclick="equipModal()">+ Add equipment</button>`:''}</div></div>
-    <div class="grid g3 no-print" style="margin:4px 0 14px">
-      <div class="field"><label>Status</label><select id="eq_status" onchange="renderEquipRows()"><option value="">All</option><option>OK</option><option>Due soon</option><option>Overdue</option><option>Retired</option><option>Unscheduled</option>${canManage?'<option>Archived</option>':''}</select></div>
-      <div class="field"><label>Search</label><input id="eq_q" placeholder="Name, type, machine, owner" oninput="renderEquipRows()"></div>
-    </div>
-    <div style="overflow-x:auto"><table><thead><tr><th>ID</th><th>Name</th><th>Type</th><th>Machine</th><th>Last cal.</th><th>Next due</th><th>Status</th>${canManage?'<th class="no-print"></th>':''}</tr></thead><tbody id="eqbody"></tbody></table></div>
-    <div class="empty hidden" id="eqempty" style="padding:18px">${list.length?'No equipment matches the filter.':`No equipment registered yet.${canManage?' Add gauges, verifiers, anilox rolls and machines to track calibration.':''}`}</div></div>`;
-  renderEquipRows();
+    <div id="lv_equip"></div></div>`;
+  listView({ key:'equip', rows:list,
+    columns:[ {label:'ID',sortVal:e=>e.id}, {label:'Name',sortVal:e=>e.name||''}, {label:'Type',sortVal:e=>e.type||''},
+      {label:'Machine',sortVal:e=>e.machine?mlabel(e.machine):''}, {label:'Last cal.',sortVal:e=>e.calibratedOn||''},
+      {label:'Next due',sortVal:e=>e.daysToDue==null?'':e.daysToDue},
+      {label:'Status',sortVal:e=>e.archived?9:(EQ_STATUS_RANK[e.calStatus]!=null?EQ_STATUS_RANK[e.calStatus]:'')}, {label:'',thClass:'no-print'} ],
+    rowHTML:equipRow,
+    searchText:e=>(e.id||'')+' '+(e.name||'')+' '+(e.type||'')+' '+(e.machine||'')+' '+(e.machine?mlabel(e.machine):'')+' '+(e.owner||''),
+    searchPlaceholder:'Name, type, machine, owner',
+    filters:[
+      {id:'status',label:'Status',options:['OK','Due soon','Overdue','Retired','Unscheduled'].concat(canManage?['Archived']:[]),
+        match:(e,v)=>v==='Archived'?true:e.calStatus===v, onChange:equipStatusFilter},
+      {id:'type',label:'Type',options:['Machine','Anilox','Gauge','Verifier','Scale','Other'],match:(e,v)=>e.type===v}
+    ],
+    emptyText:'No equipment registered yet.'+(canManage?' Add gauges, verifiers, anilox rolls and machines to track calibration.':''),
+    emptyFilterText:'No equipment matches the filter.' });
+  // filter state persists across visits — if it was left on Archived, re-enter archived mode
+  if(window._lv.equip.state.filters.status==='Archived') equipStatusFilter('Archived');
 }
-async function renderEquipRows(){
-  const canManage=isMgrRole(); const st=val("eq_status"), q=(val("eq_q")||"").toLowerCase().trim();
-  const archMode = st==='Archived';
-  let list;
-  if(archMode){
+const EQ_STATUS_RANK={'Overdue':0,'Due soon':1,'OK':2,'Unscheduled':3,'Retired':4};
+/* the Status filter doubles as the archived/active mode switch: Archived swaps the data set */
+async function equipStatusFilter(v){
+  if(v==='Archived'){
     if(!window._equipArchived){
       try{ window._equipArchived=await api("/api/equipment?archived=1"); }
-      catch(e){ toast("Could not load archived equipment — "+e.message); const s=$("#eq_status"); if(s)s.value=""; return renderEquipRows(); }
+      catch(e){ toast("Could not load archived equipment — "+e.message);
+        const lv=window._lv.equip; delete lv.state.filters.status; listView(lv.cfg); return; }
     }
-    list=window._equipArchived||[];
+    lvData('equip', window._equipArchived);
   } else {
-    list=(window._equip||[]);
-    if(st) list=list.filter(e=>e.calStatus===st);
+    lvData('equip', window._equip||[]);
   }
-  if(q) list=list.filter(e=>((e.id||"")+" "+(e.name||"")+" "+(e.type||"")+" "+(e.machine||"")+" "+(e.owner||"")).toLowerCase().includes(q));
-  const tb=$("#eqbody"); if(!tb)return;
-  tb.innerHTML=list.map(e=>{ const overdue=e.calStatus==='Overdue', soon=e.calStatus==='Due soon';
-    const due=e.nextDue?`${esc(e.nextDue)}${e.daysToDue!=null?` <span style="color:var(--muted);font-size:12px">(${e.daysToDue<0?Math.abs(e.daysToDue)+'d ago':'in '+e.daysToDue+'d'})</span>`:''}`:'—';
-    const status=archMode?`<span class="pill grey">Archived</span>`:equipStatusPill(e.calStatus);
-    const actions=archMode
-      ?`<button class="btn gold sm" onclick="restoreEquip('${jsq(e.id)}')">Restore</button> <button class="btn ghost sm" onclick="equipHistoryModal('${jsq(e.id)}')">History</button> <button class="btn ghost sm" onclick="openAmend('${jsq(e.id)}','${jsq(e.id+' · '+e.name)}')">Amendments</button>`
-      :`<button class="btn gold sm" onclick="calibrateModal('${jsq(e.id)}')">Calibrate</button> <button class="btn ghost sm" onclick="equipHistoryModal('${jsq(e.id)}')">History</button> <button class="btn ghost sm" onclick="equipModal('${jsq(e.id)}')">Edit</button> <button class="btn ghost sm" onclick="openAmend('${jsq(e.id)}','${jsq(e.id+' · '+e.name)}')">Amendments</button> <button class="btn danger sm" onclick="archiveEquip('${jsq(e.id)}')">Delete</button>`;
-    return `<tr><td><b>${esc(e.id)}</b></td><td>${esc(e.name)}</td><td>${esc(e.type)}</td><td>${e.machine?`<span class="tag-machine">${esc(mlabel(e.machine))}</span>`:'—'}</td><td>${esc(e.calibratedOn||'—')}</td><td class="${overdue?'flag bad':(soon?'flag':'')}">${due}</td><td>${status}</td>${canManage?`<td class="no-print">${actions}</td>`:''}</tr>`;
-  }).join("");
-  const em=$("#eqempty"); if(em)em.classList.toggle("hidden",!!list.length);
+}
+function equipRow(e){
+  const canManage=isMgrRole();
+  const overdue=e.calStatus==='Overdue', soon=e.calStatus==='Due soon';
+  const due=e.nextDue?`${esc(e.nextDue)}${e.daysToDue!=null?` <span style="color:var(--muted);font-size:12px">(${e.daysToDue<0?Math.abs(e.daysToDue)+'d ago':'in '+e.daysToDue+'d'})</span>`:''}`:'—';
+  const status=e.archived?`<span class="pill grey">Archived</span>`:equipStatusPill(e.calStatus);
+  const actions=e.archived
+    ?`<button class="btn gold sm" onclick="restoreEquip('${jsq(e.id)}')">Restore</button> <button class="btn ghost sm" onclick="equipHistoryModal('${jsq(e.id)}')">History</button> <button class="btn ghost sm" onclick="openAmend('${jsq(e.id)}','${jsq(e.id+' · '+e.name)}')">Amendments</button>`
+    :`<button class="btn gold sm" onclick="calibrateModal('${jsq(e.id)}')">Calibrate</button> <button class="btn ghost sm" onclick="equipHistoryModal('${jsq(e.id)}')">History</button> <button class="btn ghost sm" onclick="equipModal('${jsq(e.id)}')">Edit</button> <button class="btn ghost sm" onclick="openAmend('${jsq(e.id)}','${jsq(e.id+' · '+e.name)}')">Amendments</button> <button class="btn danger sm" onclick="archiveEquip('${jsq(e.id)}')">Delete</button>`;
+  return `<tr><td><b>${esc(e.id)}</b></td><td>${esc(e.name)}</td><td>${esc(e.type)}</td><td>${e.machine?`<span class="tag-machine">${esc(mlabel(e.machine))}</span>`:'—'}</td><td>${esc(e.calibratedOn||'—')}</td><td class="${overdue?'flag bad':(soon?'flag':'')}">${due}</td><td>${status}</td><td class="no-print">${canManage?actions:''}</td></tr>`;
 }
 /* "Delete" = archive: the record and its calibration history are kept for audits and the item can
    be restored from the Status filter → Archived. */
