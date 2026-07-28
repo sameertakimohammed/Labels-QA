@@ -643,21 +643,27 @@ function repTable(arrKey,cols,addLabel){
   return `<div style="overflow-x:auto"><table><thead>${head}</thead><tbody>${body}</tbody></table></div><div class="row-actions"><button class="btn ghost sm" onclick="rowAdd('${arrKey}')">${esc(addLabel||'+ Add row')}</button></div>`;
 }
 
-/* photos & videos — every stage form can attach either; stored in the same photos[] array */
+/* attachments — every stage form can attach photos, short videos or documents; all stored in the
+   same photos[] array as server-issued URLs */
 function isVideoUrl(u){ return /\.(mp4|webm|mov|m4v|3gp)(\?|$)/i.test(String(u||'')); }
-function mediaThumb(u){ return isVideoUrl(u)
-  ? `<span class="vid-wrap"><video src="${esc(u)}" controls preload="metadata"></video><span class="vid-note">🎥 Video attached — view in the app</span></span>`
-  : `<img src="${esc(u)}">`; }
-function photoBlock(d){ const photos=d.photos||[]; window._photos=photos.slice(); return `<h3>Photos &amp; Videos</h3><div class="row-actions">
+function isDocUrl(u){ return /\.(pdf|docx?|xlsx?)(\?|$)/i.test(String(u||'')); }
+function mediaThumb(u){
+  if(isVideoUrl(u)) return `<span class="vid-wrap"><video src="${esc(u)}" controls preload="metadata"></video><span class="vid-note">🎥 Video attached — view in the app</span></span>`;
+  if(isDocUrl(u)){ const name=String(u).split('/').pop().split('?')[0]; return `<a class="doc-chip" href="${esc(u)}" target="_blank" rel="noopener">📄 ${esc(name)}</a>`; }
+  return `<img src="${esc(u)}">`; }
+function photoBlock(d){ const photos=d.photos||[]; window._photos=photos.slice(); return `<h3>Attachments</h3><div class="row-actions">
     <label class="btn ghost sm" style="cursor:pointer">📷 Add photo<input type="file" accept="image/*" capture="environment" style="display:none" onchange="addMedia(event)"></label>
     <label class="btn ghost sm" style="cursor:pointer">🎥 Add video<input type="file" accept="video/*" capture="environment" style="display:none" onchange="addMedia(event)"></label>
+    <label class="btn ghost sm" style="cursor:pointer">📄 Add document<input type="file" accept=".pdf,.doc,.docx,.xls,.xlsx,application/pdf" style="display:none" onchange="addMedia(event)"></label>
   </div><div class="thumbs" id="thumbs">${photos.map(mediaThumb).join("")}</div>`; }
 async function addMedia(ev){ const f=ev.target.files[0]; if(!f)return; ev.target.value='';
   const isVid=(f.type||'').startsWith('video/');
+  const isDoc=/\.(pdf|docx?|xlsx?)$/i.test(f.name||'');
   if(isVid && f.size>45*1024*1024){ toast("Video too large — keep clips under 45 MB (about 30 seconds)"); return; }
-  if(isVid) toast("Uploading video…");
+  if(isDoc && f.size>20*1024*1024){ toast("Document too large — keep files under 20 MB"); return; }
+  if(isVid||isDoc) toast("Uploading…");
   const dataUrl=await new Promise(r=>{ const fr=new FileReader(); fr.onload=()=>r(fr.result); fr.readAsDataURL(f); });
-  try{ const res=await api("/api/upload",{method:"POST",body:{dataUrl,name:f.name}}); window._photos.push(res.url); $("#thumbs").innerHTML+=mediaThumb(res.url); toast(isVid?"Video added":"Photo added"); }catch(e){ toast("Upload failed (offline?)"); } }
+  try{ const res=await api("/api/upload",{method:"POST",body:{dataUrl,name:f.name}}); window._photos.push(res.url); $("#thumbs").innerHTML+=mediaThumb(res.url); toast(isVid?"Video added":(isDoc?"Document added":"Photo added")); }catch(e){ toast(e.message&&e.message!=='Failed to fetch'?e.message:"Upload failed (offline?)"); } }
 
 /* signature pad */
 function renderSig(){ const w=$("#sigWrap"); if(!w)return; w.innerHTML=`<canvas class="sig" id="sig"></canvas><div class="row-actions"><button class="btn ghost sm" onclick="sigClear()">Clear</button><button class="btn ghost sm" onclick="sigSave()">Save signature</button><span id="sigState" style="align-self:center;color:var(--muted);font-size:13px">${JOB.stage4&&JOB.stage4.signature?'✓ signature on file':''}</span></div>`;
@@ -803,7 +809,7 @@ async function doLook(){ const no=$("#lk").value.trim(); const host=$("#lkr"); c
   }
   host.innerHTML=`<div class="card"><div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap"><h2 style="margin:0">${esc(j.jobNo)} ${statusPill(j.statusOverride||(c===0?'New':(c<FLOW.length?'In Progress':'Released')))}</h2><span class="tag-machine">${esc(mlabel(j.machine))}</span><div style="margin-left:auto" class="no-print"><button class="btn ghost sm" onclick="go('entry',{jobNo:'${jsq(j.jobNo)}'})">Edit</button> <button class="btn ghost sm" onclick="openAmend('${jsq(j.jobNo)}','${jsq(j.jobNo)}')">Amendments</button> <button class="btn gold sm" onclick="window.print()">📄 SQF PDF</button></div></div><p class="sub">${esc(j.product||'—')} · ${esc(j.customer||'')} · Created ${esc(j.created)} · ${c} of ${FLOW.length} complete</p>${sBox(1,"Printing",a._done,s1h)}${legacyBox}${sBox(2,"Sheeting / Slitting",e._done,s3h)}${sBox(3,"Finishing & Release",f._done,s4h)}<p class="sub" style="margin-top:10px">Golden Manufacturers Pte Ltd · QA in-process record · printed ${new Date().toLocaleString()}</p></div>`;
 }
-function photosView(s){ return (s.photos&&s.photos.length)?`<h4>Photos &amp; Videos</h4><div class="thumbs">${s.photos.map(mediaThumb).join("")}</div>`:""; }
+function photosView(s){ return (s.photos&&s.photos.length)?`<h4>Attachments</h4><div class="thumbs">${s.photos.map(mediaThumb).join("")}</div>`:""; }
 
 /* reports */
 async function reports(){

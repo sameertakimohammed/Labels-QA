@@ -728,7 +728,7 @@ function send(res, code, obj, headers) {
   // save still in flight. Terminal handlers use `return send(...)`, so first send wins.
   if (!res._resp && !res.headersSent) res._resp = { code, body, headers: hdrs };
 }
-const MIME = { '.html':'text/html; charset=utf-8','.js':'text/javascript; charset=utf-8','.css':'text/css; charset=utf-8','.json':'application/json','.webmanifest':'application/manifest+json','.png':'image/png','.jpg':'image/jpeg','.jpeg':'image/jpeg','.svg':'image/svg+xml','.ico':'image/x-icon','.mp4':'video/mp4','.webm':'video/webm','.mov':'video/quicktime','.m4v':'video/x-m4v','.3gp':'video/3gpp' };
+const MIME = { '.html':'text/html; charset=utf-8','.js':'text/javascript; charset=utf-8','.css':'text/css; charset=utf-8','.json':'application/json','.webmanifest':'application/manifest+json','.png':'image/png','.jpg':'image/jpeg','.jpeg':'image/jpeg','.svg':'image/svg+xml','.ico':'image/x-icon','.mp4':'video/mp4','.webm':'video/webm','.mov':'video/quicktime','.m4v':'video/x-m4v','.3gp':'video/3gpp','.pdf':'application/pdf','.doc':'application/msword','.docx':'application/vnd.openxmlformats-officedocument.wordprocessingml.document','.xls':'application/vnd.ms-excel','.xlsx':'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' };
 function serveStatic(res, filePath) {
   return new Promise((resolve) => {
     fs.readFile(filePath, (err, buf) => {
@@ -999,17 +999,22 @@ async function api(req, res, url) {
     delete j.statusOverride; audit(user,'release',j.jobNo,b.reason||'hold cleared'); if(jobStatus(j)==='Released') fireEvent('job.released',{ jobNo:j.jobNo, product:j.product }); saveDB(); return send(res,200,j);
   }
 
-  if (seg[0]==='upload' && method==='POST') { // {dataUrl, name} — photo or a short video clip
+  if (seg[0]==='upload' && method==='POST') { // {dataUrl, name} — photo, short video clip, or document
     const b = await readBody(req, 64*1024*1024); // videos: ~45MB file → ~60MB base64 JSON
-    const m=/^data:(image\/\w+|video\/(?:mp4|webm|quicktime|x-m4v|3gpp2?));base64,(.+)$/.exec(b.dataUrl||'');
-    if(!m) return send(res,400,{error:'Invalid media — upload a photo (JPG/PNG) or a video clip (MP4/WebM/MOV)'});
+    const m=/^data:(image\/\w+|video\/(?:mp4|webm|quicktime|x-m4v|3gpp2?)|application\/(?:pdf|msword|vnd\.ms-excel|vnd\.openxmlformats-officedocument\.(?:wordprocessingml\.document|spreadsheetml\.sheet)));base64,(.+)$/.exec(b.dataUrl||'');
+    if(!m) return send(res,400,{error:'Invalid attachment — upload a photo (JPG/PNG), a video clip (MP4/WebM/MOV), or a document (PDF/Word/Excel)'});
     const isVideo = m[1].startsWith('video/');
+    const isDoc = m[1].startsWith('application/');
     const VIDEO_EXT = { 'video/mp4':'.mp4','video/webm':'.webm','video/quicktime':'.mov','video/x-m4v':'.m4v','video/3gpp':'.3gp','video/3gpp2':'.3gp' };
-    const ext = isVideo ? (VIDEO_EXT[m[1]]||'.mp4') : (m[1]==='image/png'?'.png':'.jpg');
+    const DOC_EXT = { 'application/pdf':'.pdf','application/msword':'.doc','application/vnd.ms-excel':'.xls',
+      'application/vnd.openxmlformats-officedocument.wordprocessingml.document':'.docx',
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet':'.xlsx' };
+    const ext = isVideo ? (VIDEO_EXT[m[1]]||'.mp4') : isDoc ? DOC_EXT[m[1]] : (m[1]==='image/png'?'.png':'.jpg');
     const contentType = m[1];
     const fn = Date.now()+'-'+crypto.randomBytes(4).toString('hex')+ext;
     const buf = Buffer.from(m[2],'base64');
     if(isVideo && buf.length>45*1024*1024) return send(res,400,{error:'Video too large — keep clips under 45 MB (about 30 seconds)'});
+    if(isDoc && buf.length>20*1024*1024) return send(res,400,{error:'Document too large — keep files under 20 MB'});
     let uploadUrl;
     if (SS.isEnabled()) { // cloud: store in Supabase Storage, keep the returned public URL
       const r = await SS.upload(fn, buf, contentType);
@@ -1019,7 +1024,7 @@ async function api(req, res, url) {
       try { fs.writeFileSync(path.join(UP_DIR,fn), buf); } catch(e){ return send(res,500,{error:'Cannot store upload: '+(e&&e.message||e)}); }
       uploadUrl = '/uploads/'+fn;
     }
-    audit(user,isVideo?'upload-video':'upload-photo','',fn); saveDB();
+    audit(user,isVideo?'upload-video':(isDoc?'upload-doc':'upload-photo'),'',fn); saveDB();
     return send(res,200,{ url:uploadUrl });
   }
 

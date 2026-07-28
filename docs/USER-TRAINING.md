@@ -38,8 +38,9 @@ customer/product → **Create Job & Begin Stage 1**.
 ### 1.2 Stage 1 — Printing
 Fill Job Details, Material, Print Stations, Machine Settings, QC Inspection. Watch the **COF** and
 **Print Registration** fields — they show a green ✓ or red ✗ against tolerance as you type.
-Add photos — or a short video clip (🎥, up to ~30 s) — of any defect; both buttons are on every
-stage form. **Save Draft** anytime; **Save & Mark Complete** when done.
+Attach evidence on any stage form: photos, a short video clip (🎥, up to ~30 s), or a document
+(📄 PDF/Word/Excel — e.g. a supplier CoA or customer spec). **Save Draft** anytime;
+**Save & Mark Complete** when done.
 
 ### 1.3 Stage 2 — Sheeting / Slitting
 Record rolls produced, random quality checks, and down-time hours. Complete with the required
