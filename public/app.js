@@ -1028,36 +1028,28 @@ async function checklistsPage(){
       <div id="chkform"></div>
     </div>
     <div class="card">
-      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px">
-        <h3 style="margin:0">Recent submissions</h3>
-        <div class="no-print" style="margin-left:auto;display:flex;gap:8px;flex-wrap:wrap;align-items:center">
-          <select id="chkf_def" onchange="chkRenderList()" title="Filter by form"><option value="">All forms</option>${defs.map(d=>`<option value="${esc(d.id)}">${esc(d.code)}</option>`).join("")}</select>
-          <select id="chkf_status" onchange="chkRenderList()" title="Filter by status"><option value="">All statuses</option><option>Draft</option><option>Completed</option><option>Verified</option></select>
-          <input id="chkf_date" type="date" onchange="chkRenderList()" title="Filter by date" style="max-width:170px">
-          <button class="btn ghost sm" onclick="chkClearFilters()">Clear</button>
-        </div>
-      </div>
-      <div id="chklist"></div>
+      <h3 style="margin:0 0 8px">Recent submissions</h3>
+      <div id="lv_chks"></div>
     </div>`;
-  chkRenderList();
+  const defCodes={}; defs.forEach(d=>{ defCodes[d.id]=d.code; });
+  listView({ key:'chks', rows:subs,
+    columns:[ {label:'Code',sortVal:s=>s.code||''}, {label:'Title',sortVal:s=>s.title||''}, {label:'Date',sortVal:s=>s.date||''},
+      {label:'Shift',sortVal:s=>s.shift||''}, {label:'Status',sortVal:s=>s.status||''}, {label:'Completed by',sortVal:s=>s.completedByName||s.completedBy||''},
+      {label:'Verified by',sortVal:s=>s.verifiedByName||s.verifiedBy||''}, {label:'',thClass:'no-print'} ],
+    rowHTML:chkRow,
+    searchText:s=>(s.code||'')+' '+(s.title||'')+' '+(s.completedByName||s.completedBy||''), searchPlaceholder:'Code, title, person',
+    filters:[
+      {id:'form',label:'Form',options:defs.map(d=>d.id),optionLabel:id=>defCodes[id]||id,allLabel:'All forms',match:(s,v)=>s.defKey===v},
+      {id:'status',label:'Status',options:['Draft','Completed','Verified'],match:(s,v)=>s.status===v},
+      {id:'date',label:'Date',type:'date',match:(s,v)=>s.date===v}
+    ],
+    emptyText:'No checklists submitted yet.', emptyFilterText:'No checklists match these filters.' });
 }
-function chkClearFilters(){ ["chkf_def","chkf_status","chkf_date"].forEach(id=>{ const el=document.getElementById(id); if(el) el.value=""; }); chkRenderList(); }
-function chkRenderList(){
-  const host=$("#chklist"); if(!host)return;
-  const all=(window._chkSubs||[]);
-  const fd=val("chkf_def"), fst=val("chkf_status"), fdt=val("chkf_date");
-  let subs=all.slice();
-  if(fd) subs=subs.filter(s=>s.defKey===fd);
-  if(fst) subs=subs.filter(s=>s.status===fst);
-  if(fdt) subs=subs.filter(s=>s.date===fdt);
-  if(!subs.length){ host.innerHTML=`<div class="empty">${all.length?'No checklists match these filters.':'No checklists submitted yet.'}</div>`; return; }
-  const canMgr=isMgrRole();
-  host.innerHTML=`<div style="overflow-x:auto"><table><thead><tr><th>Code</th><th>Title</th><th>Date</th><th>Shift</th><th>Status</th><th>Completed by</th><th>Verified by</th><th class="no-print"></th></tr></thead><tbody>${subs.map(s=>{
-    const bad=(s.responses||[]).filter(r=>r.status&&r.status!=='Yes').length;
-    const pill=s.status==='Verified'?'<span class="pill green">Verified</span>':(s.status==='Completed'?'<span class="pill amber">Completed</span>':'<span class="pill grey">Draft</span>');
-    const canVerify=canMgr && s.status==='Completed';
-    return `<tr><td><b>${esc(s.code)}</b></td><td>${esc(s.title)}${bad?` <span class="pill red" title="Unsatisfactory items">${bad}✕</span>`:''}</td><td>${esc(s.date)}</td><td>${esc(s.shift||'—')}</td><td>${pill}</td><td>${esc(s.completedByName||s.completedBy||'')}</td><td>${esc(s.verifiedByName||s.verifiedBy||'—')}</td><td class="no-print"><button class="btn ghost sm" onclick="chkView('${jsq(s.id)}')">View</button> ${canVerify?`<button class="btn gold sm" onclick="chkVerify('${jsq(s.id)}')">Verify</button>`:''} <button class="btn ghost sm" onclick="openAmend('${jsq(s.id)}','${jsq(s.code+' '+s.date)}')">Amendments</button></td></tr>`;
-  }).join("")}</tbody></table></div>`;
+function chkRow(s){
+  const bad=(s.responses||[]).filter(r=>r.status&&r.status!=='Yes').length;
+  const pill=s.status==='Verified'?'<span class="pill green">Verified</span>':(s.status==='Completed'?'<span class="pill amber">Completed</span>':'<span class="pill grey">Draft</span>');
+  const canVerify=isMgrRole() && s.status==='Completed';
+  return `<tr><td><b>${esc(s.code)}</b></td><td>${esc(s.title)}${bad?` <span class="pill red" title="Unsatisfactory items">${bad}✕</span>`:''}</td><td>${esc(s.date)}</td><td>${esc(s.shift||'—')}</td><td>${pill}</td><td>${esc(s.completedByName||s.completedBy||'')}</td><td>${esc(s.verifiedByName||s.verifiedBy||'—')}</td><td class="no-print"><button class="btn ghost sm" onclick="chkView('${jsq(s.id)}')">View</button> ${canVerify?`<button class="btn gold sm" onclick="chkVerify('${jsq(s.id)}')">Verify</button>`:''} <button class="btn ghost sm" onclick="openAmend('${jsq(s.id)}','${jsq(s.code+' '+s.date)}')">Amendments</button></td></tr>`;
 }
 function chkPick(){
   const id=val("chk_def"); const def=(window._chkDefs||[]).find(d=>d.id===id); const host=$("#chkform"); if(!host)return;
@@ -1199,10 +1191,14 @@ async function loadSpc(){
 
 /* supplier scorecards */
 async function suppliersPage(){
-  app().innerHTML=`<div class="card"><h2>Supplier scorecards</h2><p class="sub">Quality by material supplier (from the Stage-1 Supplier field).</p><div id="sup_body"><div class="empty">Loading…</div></div></div>`;
+  app().innerHTML=`<div class="card"><h2>Supplier scorecards</h2><p class="sub">Quality by material supplier (from the Stage-1 Supplier field).</p><div id="lv_suppliers"><div class="empty">Loading…</div></div></div>`;
   let list; try{ list=await api("/api/suppliers"); }catch(e){ toast(e.message); return; }
-  const rows=list.map(s=>`<tr><td><b>${esc(s.supplier)}</b></td><td>${esc(s.jobs)}</td><td>${esc(s.released)}</td><td>${esc(s.holdReject)}</td><td><span class="pill ${s.fpy>=95?'green':(s.fpy>=85?'amber':'red')}">${esc(s.fpy)}%</span></td><td>${esc(s.defectKg)}</td><td>${esc(s.wasteKg)}</td></tr>`).join("");
-  $("#sup_body").innerHTML = list.length?`<div style="overflow-x:auto"><table><thead><tr><th>Supplier</th><th>Jobs</th><th>Released</th><th>Hold/Rej</th><th>FPY</th><th>Defect kg</th><th>Waste kg</th></tr></thead><tbody>${rows}</tbody></table></div>`:`<div class="empty">No supplier data yet — set the <b>Supplier</b> field in Stage 1.</div>`;
+  listView({ key:'suppliers', rows:list,
+    columns:[ {label:'Supplier',sortVal:s=>s.supplier||''}, {label:'Jobs',sortVal:s=>s.jobs}, {label:'Released',sortVal:s=>s.released},
+      {label:'Hold/Rej',sortVal:s=>s.holdReject}, {label:'FPY',sortVal:s=>s.fpy}, {label:'Defect kg',sortVal:s=>s.defectKg}, {label:'Waste kg',sortVal:s=>s.wasteKg} ],
+    rowHTML:s=>`<tr><td><b>${esc(s.supplier)}</b></td><td>${esc(s.jobs)}</td><td>${esc(s.released)}</td><td>${esc(s.holdReject)}</td><td><span class="pill ${s.fpy>=95?'green':(s.fpy>=85?'amber':'red')}">${esc(s.fpy)}%</span></td><td>${esc(s.defectKg)}</td><td>${esc(s.wasteKg)}</td></tr>`,
+    searchText:s=>s.supplier||'', searchPlaceholder:'Supplier name',
+    emptyText:'No supplier data yet — set the Supplier field in Stage 1.', emptyFilterText:'No suppliers match the search.' });
 }
 
 /* ---------- templates: Stage-1 setup defaults per press / product ---------- */
@@ -1213,10 +1209,15 @@ async function templatesPage(){
   app().innerHTML=`<div class="empty">Loading…</div>`;
   let list=[]; try{ list=await api("/api/templates"); }catch(e){ app().innerHTML=`<div class="card"><div class="empty">Could not load templates — ${esc(e.message)}</div></div>`; return; }
   window._templates=list;
-  const rows=list.map(t=>`<tr><td><b>${esc(t.name)}</b></td><td>${t.machine?esc(mlabel(t.machine)):'<span class="sub">Any press</span>'}</td><td>${t.productType?esc(t.productType):'<span class="sub">Any product</span>'}</td><td>${((t.settings&&t.settings.materials)||[]).length} mat · ${((t.settings&&t.settings.stations)||[]).length} stn</td><td class="no-print"><button class="btn ghost sm" onclick="templateForm('${jsq(t.id)}')">Edit</button> <button class="btn danger sm" onclick="templateDel('${jsq(t.id)}')">×</button></td></tr>`).join("")||`<tr><td colspan=5><div class="empty">No templates yet — create one to auto-fill Stage 1 on new jobs.</div></td></tr>`;
   app().innerHTML=`<div class="card"><div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap"><h2 style="margin:0">Templates</h2><div style="margin-left:auto" class="no-print"><button class="btn gold" onclick="templateForm()">+ New template</button></div></div>
     <p class="sub">Default Stage&nbsp;1 setup (machine settings, raw materials, print-station values) applied automatically to a new job by its printing press and/or product type. The most specific match wins; values stay editable on the job.</p>
-    <div style="overflow-x:auto"><table><thead><tr><th>Name</th><th>Press</th><th>Product Type</th><th>Defaults</th><th></th></tr></thead><tbody>${rows}</tbody></table></div></div>`;
+    <div id="lv_templates"></div></div>`;
+  listView({ key:'templates', rows:list,
+    columns:[ {label:'Name',sortVal:t=>t.name||''}, {label:'Press',sortVal:t=>t.machine?mlabel(t.machine):''},
+      {label:'Product Type',sortVal:t=>t.productType||''}, {label:'Defaults'}, {label:'',thClass:'no-print'} ],
+    rowHTML:t=>`<tr><td><b>${esc(t.name)}</b></td><td>${t.machine?esc(mlabel(t.machine)):'<span class="sub">Any press</span>'}</td><td>${t.productType?esc(t.productType):'<span class="sub">Any product</span>'}</td><td>${((t.settings&&t.settings.materials)||[]).length} mat · ${((t.settings&&t.settings.stations)||[]).length} stn</td><td class="no-print"><button class="btn ghost sm" onclick="templateForm('${jsq(t.id)}')">Edit</button> <button class="btn danger sm" onclick="templateDel('${jsq(t.id)}')">×</button></td></tr>`,
+    searchText:t=>(t.name||'')+' '+(t.machine?mlabel(t.machine):'')+' '+(t.productType||''), searchPlaceholder:'Name, press, product',
+    emptyText:'No templates yet — create one to auto-fill Stage 1 on new jobs.', emptyFilterText:'No templates match the search.' });
 }
 async function templateDel(id){ if(!confirm("Delete this template?")) return; try{ await api("/api/templates/"+encodeURIComponent(id),{method:"DELETE"}); toast("Template deleted"); templatesPage(); }catch(e){ toast(e.message); } }
 function templateForm(id){ const src=(window._templates||[]).find(x=>x.id===id);
@@ -1265,11 +1266,17 @@ async function team(){
   const canManage=["Quality Manager","Administrator"].includes(ME.role);
   let users=[]; try{ users=await api("/api/admin/users"); }catch(e){ users=[]; }
   window._users=users;
-  const rows=users.map(u=>`<tr><td><b>${esc(u.id)}</b></td><td>${esc(u.name)}</td><td>${esc(u.role)}</td><td>${(u.qualifiedStages&&u.qualifiedStages.length)?esc(u.qualifiedStages.slice().sort().join(', ')):'—'}</td>${canManage?`<td class="no-print"><button class="btn ghost sm" onclick="userModal('${jsq(u.id)}')">Edit</button> <button class="btn danger sm" onclick="delUser('${jsq(u.id)}')">Remove</button></td>`:''}</tr>`).join("");
   app().innerHTML=`<div class="card"><h2>Team &amp; Access</h2><p class="sub">People who can sign in, their roles, and which stages they're qualified to sign off.</p>
     <h3>Users ${canManage?`<button class="btn gold sm no-print" style="margin-left:8px" onclick="userModal()">+ Add user</button>`:''}</h3>
-    <div style="overflow-x:auto"><table><thead><tr><th>Username</th><th>Name</th><th>Role</th><th>Qualified stages</th>${canManage?'<th class="no-print"></th>':''}</tr></thead><tbody>${rows||`<tr><td colspan="5" style="color:var(--muted)">No users.</td></tr>`}</tbody></table></div>
+    <div id="lv_team"></div>
     ${canManage?'<p class="sub" style="margin-top:10px">Roles: QA Officer · Supervisor · Quality Manager · Administrator. Supervisors and above can edit jobs &amp; settings; Quality Manager/Administrator manage users.</p>':'<p class="sub" style="margin-top:8px">Only a Quality Manager or Administrator can add or edit users.</p>'}</div>`;
+  listView({ key:'team', rows:users,
+    columns:[ {label:'Username',sortVal:u=>u.id}, {label:'Name',sortVal:u=>u.name||''}, {label:'Role',sortVal:u=>u.role||''},
+      {label:'Qualified stages'}, {label:'',thClass:'no-print'} ],
+    rowHTML:u=>`<tr><td><b>${esc(u.id)}</b></td><td>${esc(u.name)}</td><td>${esc(u.role)}</td><td>${(u.qualifiedStages&&u.qualifiedStages.length)?esc(u.qualifiedStages.slice().sort().join(', ')):'—'}</td><td class="no-print">${canManage?`<button class="btn ghost sm" onclick="userModal('${jsq(u.id)}')">Edit</button> <button class="btn danger sm" onclick="delUser('${jsq(u.id)}')">Remove</button>`:''}</td></tr>`,
+    searchText:u=>(u.id||'')+' '+(u.name||''), searchPlaceholder:'Username or name',
+    filters:[ {id:'role',label:'Role',options:ROLES.slice(),match:(u,v)=>u.role===v} ],
+    emptyText:'No users.', emptyFilterText:'No users match the filter.' });
 }
 /* audit trail */
 async function auditTrail(){
