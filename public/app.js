@@ -732,17 +732,64 @@ async function doLook(){ const no=$("#lk").value.trim(); const host=$("#lkr"); c
   const kv=(l,v)=>`<div><span>${l}</span><b>${esc(v||"—")}</b></div>`;
   const kvb=ps=>`<div class="kv">${ps.map(p=>kv(p[0],p[1])).join("")}</div>`;
   const sBox=(n,nm,dn,inner)=>`<div class="summary-stage"><div class="head">Stage ${n} · ${esc(nm)} ${dn?'<span class="pill green">Complete</span>':'<span class="pill grey">Pending</span>'}</div><div class="body">${dn?inner:'<div class="empty" style="padding:16px">Not yet recorded.</div>'}</div></div>`;
-  const matOf=s1=>((s1.materials&&s1.materials.length)?(s1.materials[0]||{}).materialType:s1.materialType)||"";
-  const a=j.stage1||{}; let s1h=""; if(a._done){ s1h=kvb([["Date",a.date],["QA Officer",a.qaOfficer],["Operator",a.operator],["Proceed",a.proceed],["Material",matOf(a)],["Speed",a.machineSpeed],["Setup GS1",a.setupGs1],["COF f-m",a.setupCofFilmMetal]])+((a.materials&&a.materials.length)?`<h4>Materials</h4><div style="overflow-x:auto"><table><thead><tr><th>Material</th><th>Gauge</th><th>GSM</th><th>Dyne</th><th>Supplier</th><th>Batch#</th></tr></thead><tbody>${a.materials.map(m=>`<tr><td>${esc(m.materialType)}</td><td>${esc(m.gauge)}</td><td>${esc(m.grammage)}</td><td>${esc(m.dyne)}</td><td>${esc(m.supplier)}</td><td>${esc(m.batch)}</td></tr>`).join("")}</tbody></table></div>`:"")+((a.stations&&a.stations.length)?`<h4>Print Stations</h4><div style="overflow-x:auto"><table><thead><tr><th>Station</th><th>Ink Type</th><th>Ink Batch#</th></tr></thead><tbody>${a.stations.map(s=>`<tr><td>${esc(s.name)}</td><td>${esc(s.inkType||s.ink||"")}</td><td>${esc(s.inkBatch||s.batch||"")}</td></tr>`).join("")}</tbody></table></div>`:"")+photosView(a); }
+  /* Full-record stage summaries: the printed SQF PDF must capture EVERY field each stage records,
+     not a highlight reel — reuses the entry forms' column definitions so they can't drift apart. */
+  const colTable=(title,cols,rows)=>rows&&rows.length?`<h4>${esc(title)}</h4><div style="overflow-x:auto"><table><thead><tr>${cols.map(c=>`<th>${esc(c.label||c.k)}</th>`).join("")}</tr></thead><tbody>${rows.map(r=>`<tr>${cols.map(c=>`<td>${esc(r[c.k]||'')}</td>`).join("")}</tr>`).join("")}</tbody></table></div>`:'';
+  const para=(title,v)=>v?`<h4>${esc(title)}</h4><p style="margin:4px 0">${esc(v)}</p>`:'';
+  const a=j.stage1||{}; let s1h="";
+  if(a._done){
+    s1h=kvb([["Date",a.date],["Product Description",a.productDescription],["Proceed with Order",a.proceed],["Operator",a.operator],["QA Officer",a.qaOfficer],["Supervisor",a.supervisor]]);
+    if(a.materials&&a.materials.length) s1h+=`<h4>Raw Materials</h4><div style="overflow-x:auto"><table><thead><tr><th>Material</th><th>Gauge</th><th>GSM</th><th>Dyne</th><th>Supplier</th><th>Batch#</th></tr></thead><tbody>${a.materials.map(m=>`<tr><td>${esc(m.materialType)}</td><td>${esc(m.gauge)}</td><td>${esc(m.grammage)}</td><td>${esc(m.dyne)}</td><td>${esc(m.supplier)}</td><td>${esc(m.batch)}</td></tr>`).join("")}</tbody></table></div>`;
+    if(a.stations&&a.stations.length){
+      const groups=(MD&&MD.machines&&MD.machines[j.machine]&&MD.machines[j.machine].stationGroups)||[];
+      if(groups.length){
+        s1h+=groups.map((g,gi)=>{ const cols=g.cols||[]; const rows=a.stations.filter(s=>(s.group||0)===gi);
+          return rows.length?`<h4>${esc(g.title||'Print Stations')}</h4><div style="overflow-x:auto"><table><thead><tr><th>Station</th>${cols.map(c=>`<th>${esc(c.label)}</th>`).join("")}</tr></thead><tbody>${rows.map(s=>`<tr><td><b>${esc(s.name)}</b></td>${cols.map(c=>`<td>${esc(s[c.key]||'')}</td>`).join("")}</tr>`).join("")}</tbody></table></div>`:''; }).join("");
+      } else {
+        s1h+=`<h4>Print Stations</h4><div style="overflow-x:auto"><table><thead><tr><th>Station</th><th>Ink Type</th><th>Ink Batch#</th></tr></thead><tbody>${a.stations.map(s=>`<tr><td>${esc(s.name)}</td><td>${esc(s.inkType||s.ink||"")}</td><td>${esc(s.inkBatch||s.batch||"")}</td></tr>`).join("")}</tbody></table></div>`;
+      }
+    }
+    s1h+=`<h4>Machine Settings</h4>`+kvb([["Unwinder Tension (N)",a.unwinderTension],["In-Feed Tension (N)",a.infeedTension],["Out-Feed Tension (N)",a.outfeedTension],["Rewind Tension (N)",a.rewindTension],["Speed (mpm)",a.machineSpeed],["Corona 1 (W·min/m²)",a.corona1],["Corona 2 (W·min/m²)",a.corona2],["Corona 3 (W·min/m²)",a.corona3],["Corona 4 (W·min/m²)",a.corona4]]);
+    s1h+=`<h4>Set-up Quality Control</h4>`+kvb([["Text Verification",a.setupText],["Colour vs Reference",a.setupColour],["Print Registration",a.setupRegistration],["Ink Adhesion (3M Tape)",a.setupInkAdhesion],["GS1 Barcode",a.setupGs1],["COF (Film-Metal)",a.setupCofFilmMetal],["COF (Film-Film)",a.setupCofFilmFilm],["Ink Scuffing @250",a.setupInkScuffing]]);
+    s1h+=`<h4>Approval to Run</h4>`+kvb([["QA",a.approvalQa],["Operator",a.approvalOperator],["Supervisor",a.approvalSupervisor]]);
+    s1h+=colTable('Job Running QC Tests',[{k:'roll',label:'Roll#'}].concat(RUN_COLS),a.runningTests);
+    s1h+=para('Comments',a.comments)+photosView(a);
+  }
   // Reel Inspection (F-021) is no longer part of the QA flow, but historical records stay on the
   // job and are shown read-only for traceability — signed inspection data is never deleted.
   const b=j.stage2||{}; let legacyBox="";
   if(b._done || (b.rows||[]).some(r=>r.roll||r.defect)){
-    const s2h=kvb([["Date",b.date],["Machine",b.machineName],["Shift",b.shift],["QAO",b.qaOfficer],["AVT Ref",b.avtRef]])+`<h4>Defect & Waste Log</h4><div style="overflow-x:auto"><table><thead><tr><th>Roll</th><th>Total m</th><th>Waste In</th><th>Waste Out</th><th>Defect</th><th>Kg</th></tr></thead><tbody>${(b.rows||[]).filter(x=>x.roll||x.defect).map(x=>`<tr><td>${esc(x.roll)}</td><td>${esc(x.totalMeters)}</td><td>${esc(x.wasteIn)}</td><td>${esc(x.wasteOut)}</td><td>${esc(x.defect)}</td><td>${esc(x.weightKg)}</td></tr>`).join("")||'<tr><td colspan=6>—</td></tr>'}</tbody></table></div>`+photosView(b);
+    const s2h=kvb([["Date",b.date],["Machine",b.machineName],["Shift",b.shift],["Operator",b.operator],["QA Officer",b.qaOfficer],["AVT Ref",b.avtRef]])+`<h4>Defect & Waste Log</h4><div style="overflow-x:auto"><table><thead><tr><th>Roll</th><th>Total m</th><th>Waste In</th><th>Waste Out</th><th>Defect</th><th>Kg</th></tr></thead><tbody>${(b.rows||[]).filter(x=>x.roll||x.defect).map(x=>`<tr><td>${esc(x.roll)}</td><td>${esc(x.totalMeters)}</td><td>${esc(x.wasteIn)}</td><td>${esc(x.wasteOut)}</td><td>${esc(x.defect)}</td><td>${esc(x.weightKg)}</td></tr>`).join("")||'<tr><td colspan=6>—</td></tr>'}</tbody></table></div>`+para('Remarks',b.remarks)+photosView(b);
     legacyBox=`<div class="summary-stage"><div class="head">Reel Inspection (legacy · F-021) ${b._done?'<span class="pill green">Complete</span>':'<span class="pill grey">Draft</span>'}</div><div class="body">${s2h}</div></div>`;
   }
-  const e=j.stage3||{}; let s3h=""; if(e._done){ const ps=e.productionSummary||e.rolls||[]; s3h=kvb([["Date",e.date],["Operator",e.operatorName],["QA Officer",e.qaOfficer],["Start",e.startTime],["Finish",e.finishTime],["Infeed Material",e.infeedMaterial]])+`<h4>Production Summary</h4><div style="overflow-x:auto"><table><thead><tr><th>Roll</th><th>Source</th><th>Input m</th><th>Output m</th><th># Sheets</th><th>Pallet</th></tr></thead><tbody>${ps.map(r=>`<tr><td>${esc(r.roll||r.no||"")}</td><td>${esc(r.source||"")}</td><td>${esc(r.inputMeters||"")}</td><td>${esc(r.outputMeters||r.totalSheets||"")}</td><td>${esc(r.sheets||"")}</td><td>${esc(r.pallet||"")}</td></tr>`).join("")||'<tr><td colspan=6>—</td></tr>'}</tbody></table></div>`+photosView(e); }
-  const f=j.stage4||{}; let s4h=""; if(f._done){ const pillVal=v=>(v==="Pass"||v==="Correct"||v==="Tight"||v==="Flat")?'<span class="pill green">'+esc(v)+'</span>':(v==="Fail"||v==="Incorrect"||v==="Loose"||v==="Curl")?'<span class="pill red">'+esc(v)+'</span>':esc(v||"—"); const hdr=`<tr><th>Time</th>${HOURLY_COLS.map(col=>`<th title="${esc(col.k)}">${esc(col.k.split(" ")[0])}</th>`).join("")}</tr>`; const cr=(f.checks||[]).filter(c=>c.time).map(c=>`<tr><td><b>${esc(c.time)}</b></td>${HOURLY_COLS.map(col=>`<td>${pillVal(c.vals&&c.vals[col.k])}</td>`).join("")}</tr>`).join("")||`<tr><td colspan=${HOURLY_COLS.length+1}>No checks</td></tr>`; s4h=kvb([["Date",f.date],["Shift",f.shift],["Label W×L",(f.labelWidth||"?")+" × "+(f.labelLength||"?")],["Qty On-Hold",f.quantityOnHold],["Disposition",f.disposition],["Handover",f.nextShiftQaHandover]])+`<h4>Hourly Checks</h4><div style="overflow-x:auto"><table><thead>${hdr}</thead><tbody>${cr}</tbody></table></div>`+(f.signature?`<h4>Signature</h4><img src="${esc(f.signature)}" style="max-height:90px;border:1px solid var(--line);border-radius:8px">`:"")+photosView(f); }
+  const e=j.stage3||{}; let s3h="";
+  if(e._done){
+    const ps=e.productionSummary||e.rolls||[];
+    s3h=kvb([["Date",e.date],["Customer / Item",e.customerItem],["Start Time",e.startTime],["Finish Time",e.finishTime],["Operator",e.operatorName],["QA Officer",e.qaOfficer],["Supervisor",e.supervisor]]);
+    s3h+=`<h4>Infeed Roll</h4>`+kvb([["Roll #",e.infeedRoll],["Material",e.infeedMaterial],["Reel Size",e.infeedReelSize],["Grammage",e.infeedGrammage],["Cutting Repeat",e.infeedCuttingRepeat]]);
+    s3h+=colTable('Quality in Process Checks',PROC_COLS,e.inProcessChecks);
+    const totM=ps.reduce((x,r)=>x+(parseFloat(r.outputMeters)||0),0), totS=ps.reduce((x,r)=>x+(parseFloat(r.sheets)||0),0);
+    s3h+=`<h4>Production Summary</h4><div style="overflow-x:auto"><table><thead><tr><th>Roll</th><th>Source</th><th>Input m</th><th>Output m</th><th># Sheets</th><th>Pallet</th><th>Comments</th></tr></thead><tbody>${ps.map(r=>`<tr><td>${esc(r.roll||r.no||"")}</td><td>${esc(r.source||"")}</td><td>${esc(r.inputMeters||"")}</td><td>${esc(r.outputMeters||r.totalSheets||"")}</td><td>${esc(r.sheets||"")}</td><td>${esc(r.pallet||"")}</td><td>${esc(r.comments||"")}</td></tr>`).join("")||'<tr><td colspan=7>—</td></tr>'}</tbody></table></div><p class="sub" style="margin:4px 0">Total meters produced: <b>${esc(round2(totM))}</b> · Total sheets produced: <b>${esc(totS)}</b></p>`;
+    const waste=e.wasteRows||[];
+    if(waste.length){
+      const totSet=waste.reduce((x,r)=>x+(parseFloat(r.setup)||0),0);
+      const totRun=waste.reduce((x,r)=>x+['printDefects','coreWinding','webBreak','jobChange','mechanical'].reduce((y,k)=>y+(parseFloat(r[k])||0),0),0);
+      s3h+=colTable('Production Waste Summary (kg)',WASTE_COLS,waste)+`<p class="sub" style="margin:4px 0">Total setup waste: <b>${esc(round2(totSet))} kg</b> · Total running waste: <b>${esc(round2(totRun))} kg</b></p>`;
+    }
+    s3h+=`<h4>Downtime Analysis (min/hrs)</h4>`+kvb([["Material",e.dtMaterial],["Winding",e.dtWinding],["Reel Damage",e.dtReelDamage],["Mechanical",e.dtMechanical],["Electrical",e.dtElectrical]]);
+    s3h+=para('Comments',e.comments)+photosView(e);
+  }
+  const f=j.stage4||{}; let s4h="";
+  if(f._done){
+    const pillVal=v=>(v==="Pass"||v==="Correct"||v==="Tight"||v==="Flat")?'<span class="pill green">'+esc(v)+'</span>':(v==="Fail"||v==="Incorrect"||v==="Loose"||v==="Curl")?'<span class="pill red">'+esc(v)+'</span>':esc(v||"—");
+    const hdr=`<tr><th>Time</th>${HOURLY_COLS.map(col=>`<th style="font-size:10.5px">${esc(col.k)}</th>`).join("")}</tr>`;
+    const cr=(f.checks||[]).filter(c=>c.time).map(c=>`<tr><td><b>${esc(c.time)}</b></td>${HOURLY_COLS.map(col=>`<td>${pillVal(c.vals&&c.vals[col.k])}</td>`).join("")}</tr>`).join("")||`<tr><td colspan=${HOURLY_COLS.length+1}>No checks</td></tr>`;
+    s4h=kvb([["Date",f.date],["Product / Item",f.productItem],["Shift",f.shift],["Shift Start & Finish",f.shiftStartFinish],["Label W×L (mm)",(f.labelWidth||"?")+" × "+(f.labelLength||"?")],["Label Thickness",f.labelThickness]]);
+    s4h+=`<h4>Hourly QC Checks</h4><div style="overflow-x:auto"><table><thead>${hdr}</thead><tbody>${cr}</tbody></table></div>`;
+    s4h+=`<h4>Line Clearance</h4>`+kvb([["Quantity On-Hold",f.quantityOnHold],["Reason for Rejection",f.reasonForRejection],["Disposition",f.disposition],["Unwanted Materials Removed",f.unwantedMaterialsRemoved],["Next Shift QA Handover",f.nextShiftQaHandover]]);
+    s4h+=para('Remarks',f.remarks);
+    s4h+=(f.signature?`<h4>Signature</h4><img src="${esc(f.signature)}" style="max-height:90px;border:1px solid var(--line);border-radius:8px">`:"")+photosView(f);
+  }
   host.innerHTML=`<div class="card"><div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap"><h2 style="margin:0">${esc(j.jobNo)} ${statusPill(j.statusOverride||(c===0?'New':(c<FLOW.length?'In Progress':'Released')))}</h2><span class="tag-machine">${esc(mlabel(j.machine))}</span><div style="margin-left:auto" class="no-print"><button class="btn ghost sm" onclick="go('entry',{jobNo:'${jsq(j.jobNo)}'})">Edit</button> <button class="btn ghost sm" onclick="openAmend('${jsq(j.jobNo)}','${jsq(j.jobNo)}')">Amendments</button> <button class="btn gold sm" onclick="window.print()">📄 SQF PDF</button></div></div><p class="sub">${esc(j.product||'—')} · ${esc(j.customer||'')} · Created ${esc(j.created)} · ${c} of ${FLOW.length} complete</p>${sBox(1,"Printing",a._done,s1h)}${legacyBox}${sBox(2,"Sheeting / Slitting",e._done,s3h)}${sBox(3,"Finishing & Release",f._done,s4h)}<p class="sub" style="margin-top:10px">Golden Manufacturers Pte Ltd · QA in-process record · printed ${new Date().toLocaleString()}</p></div>`;
 }
 function photosView(s){ return (s.photos&&s.photos.length)?`<h4>Photos</h4><div class="thumbs">${s.photos.map(u=>`<img src="${esc(u)}">`).join("")}</div>`:""; }
