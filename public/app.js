@@ -651,11 +651,16 @@ function mediaThumb(u){
   if(isVideoUrl(u)) return `<span class="vid-wrap"><video src="${esc(u)}" controls preload="metadata"></video><span class="vid-note">🎥 Video attached — view in the app</span></span>`;
   if(isDocUrl(u)){ const name=String(u).split('/').pop().split('?')[0]; return `<a class="doc-chip" href="${esc(u)}" target="_blank" rel="noopener">📄 ${esc(name)}</a>`; }
   return `<img src="${esc(u)}">`; }
+function attThumb(u,i){ return `<span class="att">${mediaThumb(u)}<button class="att-x no-print" title="Remove attachment" onclick="removeMedia(${i})">×</button></span>`; }
+function renderThumbs(){ const t=$("#thumbs"); if(t)t.innerHTML=(window._photos||[]).map(attThumb).join(""); }
+function removeMedia(i){ const u=(window._photos||[])[i]; if(u==null)return;
+  if(!confirm("Remove this attachment from the record?\n\nIt is taken off when you next save this stage.")) return;
+  window._photos.splice(i,1); renderThumbs(); toast("Attachment removed — save to apply"); }
 function photoBlock(d){ const photos=d.photos||[]; window._photos=photos.slice(); return `<h3>Attachments</h3><div class="row-actions">
     <label class="btn ghost sm" style="cursor:pointer">📷 Add photo<input type="file" accept="image/*" capture="environment" style="display:none" onchange="addMedia(event)"></label>
     <label class="btn ghost sm" style="cursor:pointer">🎥 Add video<input type="file" accept="video/*" capture="environment" style="display:none" onchange="addMedia(event)"></label>
     <label class="btn ghost sm" style="cursor:pointer">📄 Add document<input type="file" accept=".pdf,.doc,.docx,.xls,.xlsx,application/pdf" style="display:none" onchange="addMedia(event)"></label>
-  </div><div class="thumbs" id="thumbs">${photos.map(mediaThumb).join("")}</div>`; }
+  </div><div class="thumbs" id="thumbs">${photos.map(attThumb).join("")}</div>`; }
 async function addMedia(ev){ const f=ev.target.files[0]; if(!f)return; ev.target.value='';
   const isVid=(f.type||'').startsWith('video/');
   const isDoc=/\.(pdf|docx?|xlsx?)$/i.test(f.name||'');
@@ -663,7 +668,7 @@ async function addMedia(ev){ const f=ev.target.files[0]; if(!f)return; ev.target
   if(isDoc && f.size>20*1024*1024){ toast("Document too large — keep files under 20 MB"); return; }
   if(isVid||isDoc) toast("Uploading…");
   const dataUrl=await new Promise(r=>{ const fr=new FileReader(); fr.onload=()=>r(fr.result); fr.readAsDataURL(f); });
-  try{ const res=await api("/api/upload",{method:"POST",body:{dataUrl,name:f.name}}); window._photos.push(res.url); $("#thumbs").innerHTML+=mediaThumb(res.url); toast(isVid?"Video added":(isDoc?"Document added":"Photo added")); }catch(e){ toast(e.message&&e.message!=='Failed to fetch'?e.message:"Upload failed (offline?)"); } }
+  try{ const res=await api("/api/upload",{method:"POST",body:{dataUrl,name:f.name}}); window._photos.push(res.url); renderThumbs(); toast(isVid?"Video added":(isDoc?"Document added":"Photo added")); }catch(e){ toast(e.message&&e.message!=='Failed to fetch'?e.message:"Upload failed (offline?)"); } }
 
 /* signature pad */
 function renderSig(){ const w=$("#sigWrap"); if(!w)return; w.innerHTML=`<canvas class="sig" id="sig"></canvas><div class="row-actions"><button class="btn ghost sm" onclick="sigClear()">Clear</button><button class="btn ghost sm" onclick="sigSave()">Save signature</button><span id="sigState" style="align-self:center;color:var(--muted);font-size:13px">${JOB.stage4&&JOB.stage4.signature?'✓ signature on file':''}</span></div>`;
@@ -1157,13 +1162,15 @@ function statusPillCal(r){ const bad=String(r||'').toLowerCase().indexOf('fail')
 /* ---------- Checklists (F-012 hygiene, F-013B GMP, …) ---------- */
 function chkRespOpts(def){ return def && def.responseType==='yesno' ? ['','Yes','No'] : ['','Yes','X']; }
 function chkStatusPill(s){ if(s==='Yes') return '<span class="pill green">Yes</span>'; if(s==='X'||s==='No') return '<span class="pill red">'+esc(s)+'</span>'; return '<span class="pill grey">—</span>'; }
+function renderChkThumbs(){ const t=$("#chkthumbs"); if(t)t.innerHTML=(window._chkPhotos||[]).map((u,i)=>`<span class="att"><img src="${esc(u)}"><button class="att-x no-print" title="Remove photo" onclick="removeChkPhoto(${i})">×</button></span>`).join(""); }
+function removeChkPhoto(i){ if((window._chkPhotos||[])[i]==null)return; if(!confirm("Remove this photo from the checklist?")) return; window._chkPhotos.splice(i,1); renderChkThumbs(); }
 /* Attach a photo to the whole submission (no key) or to a specific item (key). Reuses /api/upload. */
 async function chkPhoto(ev, key){
   const f=ev.target.files[0]; if(!f)return; ev.target.value='';
   const dataUrl=await new Promise(r=>{ const fr=new FileReader(); fr.onload=()=>r(fr.result); fr.readAsDataURL(f); });
   try{ const res=await api("/api/upload",{method:"POST",body:{dataUrl,name:f.name}});
     if(key){ const r=window._chkResp[key]; r.photos=r.photos||[]; r.photos.push(res.url); const c=document.getElementById('cph_'+key); if(c)c.textContent=r.photos.length; }
-    else { window._chkPhotos.push(res.url); const t=$("#chkthumbs"); if(t)t.innerHTML+=`<img src="${esc(res.url)}">`; }
+    else { window._chkPhotos.push(res.url); renderChkThumbs(); }
     toast("Photo added");
   }catch(e){ toast("Upload failed (offline?)"); }
 }
