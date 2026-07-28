@@ -287,6 +287,71 @@ async function main() {
       !!(r.body && Array.isArray(r.body.users) && !r.body.users.some((u) => u.id === NEWUSER)),
       'still present');
 
+    // 12b. user delete is an archive: sign-in blocked, sessions killed, restorable
+    const ARCUSER = 'arcu' + PID;
+    await request('POST', '/api/admin/users', { id: ARCUSER, name: 'Arc User', role: 'QA Officer', password: 'secret123' }, adminToken);
+    r = await request('POST', '/api/login', { username: ARCUSER, password: 'secret123' });
+    const arcUserTok = r.body && r.body.token;
+    ok('archive-test user can sign in before archive', !!arcUserTok, JSON.stringify(r.body));
+    r = await request('DELETE', '/api/admin/users/' + encodeURIComponent(ARCUSER), undefined, adminToken);
+    eq('archive user -> 200', r.status, 200);
+    r = await request('GET', '/api/me', undefined, arcUserTok);
+    eq('archived user session killed -> 401', r.status, 401);
+    r = await request('POST', '/api/login', { username: ARCUSER, password: 'secret123' });
+    eq('archived user sign-in -> 403', r.status, 403);
+    r = await request('GET', '/api/admin/users?archived=1', undefined, adminToken);
+    ok('archived user listed via ?archived=1', (r.body || []).some((u) => u.id === ARCUSER && u.archived === true), JSON.stringify(r.body && r.body.length));
+    r = await request('POST', '/api/admin/users', { id: ARCUSER, name: 'Dup', role: 'QA Officer', password: 'secret123' }, adminToken);
+    ok('re-creating archived user id -> 409 with restore hint', r.status === 409 && /archive/i.test((r.body || {}).error || ''), JSON.stringify(r.body));
+    r = await request('PUT', '/api/admin/users/' + encodeURIComponent(ARCUSER), { name: 'nope' }, adminToken);
+    eq('edit archived user -> 409', r.status, 409);
+    r = await request('DELETE', '/api/admin/users/' + encodeURIComponent(ARCUSER), undefined, adminToken);
+    eq('archive an archived user -> 409', r.status, 409);
+    r = await request('POST', '/api/admin/users/' + encodeURIComponent(ARCUSER) + '/restore', undefined, adminToken);
+    eq('POST /api/admin/users/:id/restore -> 200', r.status, 200);
+    r = await request('POST', '/api/login', { username: ARCUSER, password: 'secret123' });
+    eq('restored user can sign in again', r.status, 200);
+    r = await request('POST', '/api/admin/users/' + encodeURIComponent(ARCUSER) + '/restore', undefined, adminToken);
+    eq('restore a non-archived user -> 409', r.status, 409);
+    await request('DELETE', '/api/admin/users/' + encodeURIComponent(ARCUSER), undefined, adminToken);
+
+    // 12c. template delete is an archive: stops matching new jobs, restorable
+    r = await request('POST', '/api/templates', { name: 'Arc TPL ' + PID, machine: 'Flexo450', settings: { machineSpeed: '111' } }, adminToken);
+    const arcTpl = r.body && r.body.id;
+    r = await request('DELETE', '/api/templates/' + encodeURIComponent(arcTpl), undefined, adminToken);
+    eq('DELETE /api/templates/:id (archive) -> 200', r.status, 200);
+    r = await request('GET', '/api/templates', undefined, adminToken);
+    ok('archived template hidden from default list', !(r.body || []).some((t) => t.id === arcTpl), arcTpl);
+    r = await request('GET', '/api/templates?archived=1', undefined, adminToken);
+    ok('archived template listed via ?archived=1', (r.body || []).some((t) => t.id === arcTpl && t.archived === true), JSON.stringify(r.body && r.body.length));
+    r = await request('POST', '/api/jobs', { jobNo: 'TPLARC-' + PID, machine: 'Flexo450' }, adminToken);
+    ok('archived template no longer applied to new jobs', r.status === 200 && r.body.templateApplied !== 'Arc TPL ' + PID, JSON.stringify(r.body && r.body.templateApplied));
+    await request('DELETE', '/api/jobs/' + encodeURIComponent('TPLARC-' + PID), undefined, adminToken);
+    r = await request('PUT', '/api/templates/' + encodeURIComponent(arcTpl), { name: 'nope' }, adminToken);
+    eq('edit archived template -> 409', r.status, 409);
+    r = await request('POST', '/api/templates/' + encodeURIComponent(arcTpl) + '/restore', undefined, adminToken);
+    eq('POST /api/templates/:id/restore -> 200', r.status, 200);
+    r = await request('GET', '/api/templates', undefined, adminToken);
+    ok('restored template back in list', (r.body || []).some((t) => t.id === arcTpl && !t.archived), arcTpl);
+    await request('DELETE', '/api/templates/' + encodeURIComponent(arcTpl), undefined, adminToken);
+
+    // 12d. checklist-def delete is an archive: leaves pickers/due, restorable
+    r = await request('POST', '/api/checklist-defs', { code: 'F-DARC', title: 'Def archive test', frequency: 'daily', items: [{ label: 'One' }] }, adminToken);
+    const arcDefX = r.body && r.body.id;
+    r = await request('DELETE', '/api/checklist-defs/' + encodeURIComponent(arcDefX), undefined, adminToken);
+    eq('DELETE /api/checklist-defs/:id (archive) -> 200', r.status, 200);
+    r = await request('GET', '/api/checklist-defs', undefined, adminToken);
+    ok('archived form hidden from defs list', !(r.body || []).some((d) => d.id === arcDefX), arcDefX);
+    r = await request('GET', '/api/checklists/due', undefined, adminToken);
+    ok('archived form absent from due tracking', !(r.body || []).some((d) => d.code === 'F-DARC'), 'F-DARC');
+    r = await request('PUT', '/api/checklist-defs/' + encodeURIComponent(arcDefX), { title: 'nope' }, adminToken);
+    eq('edit archived form -> 409', r.status, 409);
+    r = await request('POST', '/api/checklist-defs/' + encodeURIComponent(arcDefX) + '/restore', undefined, adminToken);
+    eq('POST /api/checklist-defs/:id/restore -> 200', r.status, 200);
+    r = await request('GET', '/api/checklist-defs', undefined, adminToken);
+    ok('restored form back in defs list', (r.body || []).some((d) => d.id === arcDefX && !d.archived), arcDefX);
+    await request('DELETE', '/api/checklist-defs/' + encodeURIComponent(arcDefX), undefined, adminToken);
+
     // 13. non-manager cannot manage users -> 403
     r = await request('POST', '/api/login', { username: 'akumar', password: 'kumar123' });
     eq('login akumar (QA Officer) -> 200', r.status, 200);

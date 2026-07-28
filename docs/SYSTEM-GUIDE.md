@@ -261,7 +261,7 @@ All endpoints are under `/api`. Auth: `x-token: <session>` (login) or `x-api-key
 | `GET/POST/PUT /api/equipment[/:id]` · `POST /api/equipment/:id/calibrate` | Equipment + calibrate (`GET ?archived=1` lists archived) | view: authed · write: Supervisor |
 | `DELETE /api/equipment/:id` · `POST /api/equipment/:id/restore` | Archive (hide, keep history) · restore | Supervisor |
 | `GET /api/equipment/:id/history` · `GET /api/equipment/calibration-history.csv` | Calibration history + CSV extract (archived items included) | authed |
-| `GET /api/checklist-defs` · `POST/PUT/DELETE /api/checklist-defs[/:id]` | Checklist form templates | view: authed · write: Supervisor |
+| `GET /api/checklist-defs` · `POST/PUT/DELETE /api/checklist-defs[/:id]` · `POST /api/checklist-defs/:id/restore` | Checklist form templates (delete = archive; `GET ?archived=1` lists archived) | view: authed · write: Supervisor |
 | `GET/POST /api/checklists[/:id]` · `PUT /api/checklists/:id` · `POST /api/checklists/:id/verify` | Checklist submissions · verify (2nd person) (`GET ?archived=1` lists archived) | authed · verify: Supervisor |
 | `DELETE /api/checklists/:id` · `POST /api/checklists/:id/restore` | Archive (hide, keep record; re-arms due status) · restore | Supervisor |
 | `GET /api/checklists/due` | Per-form due status (daily before-noon / monthly month-end) | authed |
@@ -269,7 +269,7 @@ All endpoints are under `/api`. Auth: `x-token: <session>` (login) or `x-api-key
 | `GET /api/exec` | Executive RAG summary | Supervisor |
 | `GET /api/audit[?recordId=&jobNo=&recordType=&from=&to=]` · `GET /api/audit/export.csv` · `GET /api/audit/verify` | Amendments History (field-level) · CSV export · integrity check | Supervisor |
 | `GET /api/masterdata` · `PUT /api/masterdata` | Master data | view: authed · write: Supervisor |
-| `GET/POST/PUT/DELETE /api/admin/users[/:id]` | User management | GET: Supervisor · write: QM |
+| `GET/POST/PUT/DELETE /api/admin/users[/:id]` · `POST /api/admin/users/:id/restore` | User management (delete = archive: sign-in blocked, sessions killed; `GET ?archived=1` lists archived) | GET: Supervisor · write: QM |
 | `GET /api/admin/backups` · `POST /api/admin/restore` | Backups · restore | Supervisor · Administrator |
 | `GET/POST/DELETE /api/admin/apikeys[/:id]` | API keys | Administrator |
 | `GET/POST/DELETE /api/admin/webhooks[/:id]` | Webhooks | Administrator |

@@ -1338,18 +1338,40 @@ async function templatesPage(){
   if(!isMgrRole()){ app().innerHTML=`<div class="card"><div class="empty">Templates are managed by Supervisors and Quality Managers.</div></div>`; return; }
   app().innerHTML=`<div class="empty">Loading…</div>`;
   let list=[]; try{ list=await api("/api/templates"); }catch(e){ app().innerHTML=`<div class="card"><div class="empty">Could not load templates — ${esc(e.message)}</div></div>`; return; }
-  window._templates=list;
+  window._templates=list; window._templatesArchived=null;
   app().innerHTML=`<div class="card"><div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap"><h2 style="margin:0">Templates</h2><div style="margin-left:auto" class="no-print"><button class="btn gold" onclick="templateForm()">+ New template</button></div></div>
     <p class="sub">Default Stage&nbsp;1 setup (machine settings, raw materials, print-station values) applied automatically to a new job by its printing press and/or product type. The most specific match wins; values stay editable on the job.</p>
     <div id="lv_templates"></div></div>`;
   listView({ key:'templates', rows:list,
     columns:[ {label:'Name',sortVal:t=>t.name||''}, {label:'Press',sortVal:t=>t.machine?mlabel(t.machine):''},
       {label:'Product Type',sortVal:t=>t.productType||''}, {label:'Defaults'}, {label:'',thClass:'no-print'} ],
-    rowHTML:t=>`<tr><td><b>${esc(t.name)}</b></td><td>${t.machine?esc(mlabel(t.machine)):'<span class="sub">Any press</span>'}</td><td>${t.productType?esc(t.productType):'<span class="sub">Any product</span>'}</td><td>${((t.settings&&t.settings.materials)||[]).length} mat · ${((t.settings&&t.settings.stations)||[]).length} stn</td><td class="no-print"><button class="btn ghost sm" onclick="templateForm('${jsq(t.id)}')">Edit</button> <button class="btn danger sm" onclick="templateDel('${jsq(t.id)}')">×</button></td></tr>`,
+    rowHTML:tplRow,
     searchText:t=>(t.name||'')+' '+(t.machine?mlabel(t.machine):'')+' '+(t.productType||''), searchPlaceholder:'Name, press, product',
+    filters:[ {id:'show',label:'Show',options:['Archived'],allLabel:'Active',match:()=>true,onChange:tplStatusFilter} ],
     emptyText:'No templates yet — create one to auto-fill Stage 1 on new jobs.', emptyFilterText:'No templates match the search.' });
+  if(window._lv.templates.state.filters.show==='Archived') tplStatusFilter('Archived');
 }
-async function templateDel(id){ if(!confirm("Delete this template?")) return; try{ await api("/api/templates/"+encodeURIComponent(id),{method:"DELETE"}); toast("Template deleted"); templatesPage(); }catch(e){ toast(e.message); } }
+async function tplStatusFilter(v){
+  if(v==='Archived'){
+    if(!window._templatesArchived){
+      try{ window._templatesArchived=await api("/api/templates?archived=1"); }
+      catch(e){ toast("Could not load archived templates — "+e.message);
+        const lv=window._lv.templates; delete lv.state.filters.show; listView(lv.cfg); return; }
+    }
+    lvData('templates', window._templatesArchived);
+  } else {
+    lvData('templates', window._templates||[]);
+  }
+}
+function tplRow(t){
+  const actions=t.archived
+    ?`<span class="pill grey">Archived</span> <button class="btn gold sm" onclick="templateRestore('${jsq(t.id)}')">Restore</button>`
+    :`<button class="btn ghost sm" onclick="templateForm('${jsq(t.id)}')">Edit</button> <button class="btn danger sm" onclick="templateDel('${jsq(t.id)}')">Delete</button>`;
+  return `<tr><td><b>${esc(t.name)}</b></td><td>${t.machine?esc(mlabel(t.machine)):'<span class="sub">Any press</span>'}</td><td>${t.productType?esc(t.productType):'<span class="sub">Any product</span>'}</td><td>${((t.settings&&t.settings.materials)||[]).length} mat · ${((t.settings&&t.settings.stations)||[]).length} stn</td><td class="no-print">${actions}</td></tr>`;
+}
+/* "Delete" = archive: the template stops matching new jobs but can be restored from Show → Archived. */
+async function templateDel(id){ if(!confirm("Delete this template?\n\nIt will stop being applied to new jobs; it can be restored from Show → Archived.")) return; try{ await api("/api/templates/"+encodeURIComponent(id),{method:"DELETE"}); toast("Template archived"); templatesPage(); }catch(e){ toast(e.message); } }
+async function templateRestore(id){ try{ await api("/api/templates/"+encodeURIComponent(id)+"/restore",{method:"POST"}); toast("Template restored"); templatesPage(); }catch(e){ toast(e.message); } }
 function templateForm(id){ const src=(window._templates||[]).find(x=>x.id===id);
   const t=src?JSON.parse(JSON.stringify(src)):{ id:null, name:"", machine:"", productType:"", settings:{} };
   t.settings=t.settings||{}; if(!Array.isArray(t.settings.materials)||!t.settings.materials.length)t.settings.materials=[{}]; if(!Array.isArray(t.settings.stations))t.settings.stations=[];
@@ -1395,7 +1417,7 @@ function tplRender(){ const t=window._tpl; const machine=t.machine||"";
 async function team(){
   const canManage=["Quality Manager","Administrator"].includes(ME.role);
   let users=[]; try{ users=await api("/api/admin/users"); }catch(e){ users=[]; }
-  window._users=users;
+  window._users=users; window._usersArchived=null;
   app().innerHTML=`<div class="card"><h2>Team &amp; Access</h2><p class="sub">People who can sign in, their roles, and which stages they're qualified to sign off.</p>
     <h3>Users ${canManage?`<button class="btn gold sm no-print" style="margin-left:8px" onclick="userModal()">+ Add user</button>`:''}</h3>
     <div id="lv_team"></div>
@@ -1403,11 +1425,33 @@ async function team(){
   listView({ key:'team', rows:users,
     columns:[ {label:'Username',sortVal:u=>u.id}, {label:'Name',sortVal:u=>u.name||''}, {label:'Role',sortVal:u=>u.role||''},
       {label:'Qualified stages'}, {label:'',thClass:'no-print'} ],
-    rowHTML:u=>`<tr><td><b>${esc(u.id)}</b></td><td>${esc(u.name)}</td><td>${esc(u.role)}</td><td>${(u.qualifiedStages&&u.qualifiedStages.length)?esc(u.qualifiedStages.slice().sort().join(', ')):'—'}</td><td class="no-print">${canManage?`<button class="btn ghost sm" onclick="userModal('${jsq(u.id)}')">Edit</button> <button class="btn danger sm" onclick="delUser('${jsq(u.id)}')">Remove</button>`:''}</td></tr>`,
+    rowHTML:userRow,
     searchText:u=>(u.id||'')+' '+(u.name||''), searchPlaceholder:'Username or name',
-    filters:[ {id:'role',label:'Role',options:ROLES.slice(),match:(u,v)=>u.role===v} ],
+    filters:[ {id:'role',label:'Role',options:ROLES.slice(),match:(u,v)=>u.role===v} ]
+      .concat(canManage?[{id:'show',label:'Show',options:['Archived'],allLabel:'Active',match:()=>true,onChange:teamStatusFilter}]:[]),
     emptyText:'No users.', emptyFilterText:'No users match the filter.' });
+  if(canManage && window._lv.team.state.filters.show==='Archived') teamStatusFilter('Archived');
 }
+async function teamStatusFilter(v){
+  if(v==='Archived'){
+    if(!window._usersArchived){
+      try{ window._usersArchived=await api("/api/admin/users?archived=1"); }
+      catch(e){ toast("Could not load archived users — "+e.message);
+        const lv=window._lv.team; delete lv.state.filters.show; listView(lv.cfg); return; }
+    }
+    lvData('team', window._usersArchived);
+  } else {
+    lvData('team', window._users||[]);
+  }
+}
+function userRow(u){
+  const canManage=ME&&["Quality Manager","Administrator"].includes(ME.role);
+  const actions=u.archived
+    ?`<span class="pill grey">Archived</span>${canManage?` <button class="btn gold sm" onclick="restoreUser('${jsq(u.id)}')">Restore</button>`:''}`
+    :(canManage?`<button class="btn ghost sm" onclick="userModal('${jsq(u.id)}')">Edit</button> <button class="btn danger sm" onclick="delUser('${jsq(u.id)}')">Remove</button>`:'');
+  return `<tr><td><b>${esc(u.id)}</b></td><td>${esc(u.name)}</td><td>${esc(u.role)}</td><td>${(u.qualifiedStages&&u.qualifiedStages.length)?esc(u.qualifiedStages.slice().sort().join(', ')):'—'}</td><td class="no-print">${actions}</td></tr>`;
+}
+async function restoreUser(id){ try{ await api("/api/admin/users/"+encodeURIComponent(id)+"/restore",{method:"POST"}); toast("User restored"); team(); }catch(e){ toast(e.message); } }
 /* audit trail */
 async function auditTrail(){
   app().innerHTML=`<div class="card"><div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
@@ -1489,13 +1533,18 @@ async function settings(){
 }
 async function chkDefsAdmin(){
   const host=$("#chkDefsAdmin"); if(!host)return;
-  let defs=[]; try{ defs=await api("/api/checklist-defs"); }catch(e){ host.innerHTML=`<div class="empty">${esc(e.message)}</div>`; return; }
+  let defs=[], archived=[];
+  try{ defs=await api("/api/checklist-defs"); archived=await api("/api/checklist-defs?archived=1"); }catch(e){ host.innerHTML=`<div class="empty">${esc(e.message)}</div>`; return; }
   window._chkDefsAdmin=defs;
+  const archivedStrip=archived.length?`<div style="border:1px solid var(--line);border-radius:8px;padding:12px;margin-bottom:10px;background:#f8fafc">
+      <div class="sub" style="margin-bottom:8px">Archived forms — no longer offered or tracked as due; past submissions keep working.</div>
+      ${archived.map(d=>`<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:4px 0"><b>${esc(d.code||'(no code)')}</b> — ${esc(d.title)} <span class="pill grey">Archived</span> <button class="btn gold sm" onclick="restoreChkDef('${jsq(d.id)}')">Restore</button></div>`).join("")}
+    </div>`:'';
   host.innerHTML=defs.map((d,i)=>`<div style="border:1px solid var(--line);border-radius:8px;padding:12px;margin-bottom:10px">
       <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center"><b>${esc(d.code||'(no code)')}</b> — ${esc(d.title)} <span class="pill grey">${esc(d.frequency||'')}</span> <span class="sub">${(d.items||[]).length} items</span></div>
       <textarea id="cd_items_${i}" style="min-height:120px;margin-top:8px">${esc((d.items||[]).map(it=>it.label).join("\n"))}</textarea>
-      <div class="row-actions"><button class="btn ghost sm" onclick="saveChkDef(${i})">Save ${esc(d.code||d.title)} items</button></div>
-    </div>`).join("")+`
+      <div class="row-actions"><button class="btn ghost sm" onclick="saveChkDef(${i})">Save ${esc(d.code||d.title)} items</button> <button class="btn danger sm" onclick="delChkDef('${jsq(d.id)}','${jsq(d.code||d.title)}')">Delete</button></div>
+    </div>`).join("")+archivedStrip+`
     <div style="border:1px dashed var(--line-strong);border-radius:8px;padding:12px">
       <div class="grid g3"><div class="field"><label>New form code</label><input id="cd_new_code" placeholder="e.g. F-020"></div><div class="field"><label>Title</label><input id="cd_new_title" placeholder="e.g. Warehouse GMP Checklist"></div><div class="field"><label>Frequency</label><select id="cd_new_freq"><option>daily</option><option>shift</option><option>weekly</option><option>monthly</option><option>ad-hoc</option></select></div></div>
       <div class="field"><label>Items (one per line)</label><textarea id="cd_new_items" style="min-height:90px"></textarea></div>
@@ -1503,6 +1552,9 @@ async function chkDefsAdmin(){
     </div>`;
 }
 function cdItems(text){ return String(text||'').split(/\r?\n/).map(s=>s.trim()).filter(Boolean).map((label,i)=>({key:'i'+(i+1),label})); }
+async function delChkDef(id,label){ if(!confirm("Delete checklist form '"+label+"'?\n\nIt will stop being offered and tracked as due; past submissions keep working and the form can be restored.")) return;
+  try{ await api("/api/checklist-defs/"+encodeURIComponent(id),{method:"DELETE"}); toast("Checklist form archived"); chkDefsAdmin(); }catch(e){ toast(e.message); } }
+async function restoreChkDef(id){ try{ await api("/api/checklist-defs/"+encodeURIComponent(id)+"/restore",{method:"POST"}); toast("Checklist form restored"); chkDefsAdmin(); }catch(e){ toast(e.message); } }
 async function saveChkDef(i){ const d=window._chkDefsAdmin[i]; const items=cdItems(val("cd_items_"+i));
   try{ await api("/api/checklist-defs/"+encodeURIComponent(d.id),{method:"PUT",body:{code:d.code,title:d.title,frequency:d.frequency,responseType:d.responseType,hasCorrectiveAction:d.hasCorrectiveAction,requireVerify:d.requireVerify,active:d.active,items}}); toast("Saved "+(d.code||d.title)); chkDefsAdmin(); }catch(e){ toast(e.message); } }
 async function addChkDef(){ const title=val("cd_new_title").trim(); if(!title){ toast("Title is required"); return; }
@@ -1554,7 +1606,9 @@ async function saveUser(id){ const name=val("u_name").trim(), role=val("u_role")
     closeModal(); toast("User saved"); team();
   }catch(e){ toast(e.message); }
 }
-async function delUser(id){ if(!confirm("Remove user '"+id+"'? This cannot be undone.")) return; try{ await api("/api/admin/users/"+encodeURIComponent(id),{method:"DELETE"}); toast("User removed"); team(); }catch(e){ toast(e.message); } }
+/* "Remove" = archive: sign-in is blocked and live sessions end, but the account (and its name on
+   every audit entry) is kept and can be restored from Show → Archived. */
+async function delUser(id){ if(!confirm("Remove user '"+id+"'?\n\nThey will no longer be able to sign in; the account is kept and can be restored from Show → Archived.")) return; try{ await api("/api/admin/users/"+encodeURIComponent(id),{method:"DELETE"}); toast("User archived"); team(); }catch(e){ toast(e.message); } }
 async function saveTol(){ MD.tolerances=Object.assign(MD.tolerances,{cofMin:parseFloat(val("t_cofMin")),cofMax:parseFloat(val("t_cofMax")),registrationMaxMm:parseFloat(val("t_reg")),barcodeMinGrade:val("t_bc")}); await api("/api/masterdata",{method:"PUT",body:{tolerances:MD.tolerances}}); toast("Tolerances saved"); }
 async function saveDefects(){ MD.defectTypes=val("a_def").split(",").map(s=>s.trim()).filter(Boolean); await api("/api/masterdata",{method:"PUT",body:{defectTypes:MD.defectTypes}}); toast("Defect list saved"); }
 async function saveProducts(){ MD.productTypes=val("a_pt").split(/\r?\n/).map(s=>s.trim()).filter(Boolean); await api("/api/masterdata",{method:"PUT",body:{productTypes:MD.productTypes}}); toast("Product types saved"); }
