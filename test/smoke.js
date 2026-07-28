@@ -495,8 +495,17 @@ async function main() {
     ok('stored video served back byte-for-byte', r.status === 200 && r.raw === VIDBYTES, 'len=' + (r.raw || '').length);
     r = await request('POST', '/api/upload', { dataUrl: 'data:video/quicktime;base64,' + Buffer.from('mov').toString('base64'), name: 'v.mov' }, adminToken);
     ok('quicktime stored as .mov', r.status === 200 && /\.mov$/.test((r.body || {}).url || ''), JSON.stringify(r.body));
-    r = await request('POST', '/api/upload', { dataUrl: 'data:application/pdf;base64,' + Buffer.from('nope').toString('base64'), name: 'x.pdf' }, adminToken);
-    eq('non image/video upload -> 400', r.status, 400);
+    const PDFBYTES = '%PDF-1.4 smoke ' + PID;
+    r = await request('POST', '/api/upload', { dataUrl: 'data:application/pdf;base64,' + Buffer.from(PDFBYTES).toString('base64'), name: 'd.pdf' }, adminToken);
+    eq('upload document (pdf) -> 200', r.status, 200);
+    const durl = (r.body || {}).url || '';
+    ok('document stored under /uploads as .pdf', /^\/uploads\/[\w.-]+\.pdf$/.test(durl), JSON.stringify(r.body));
+    r = await request('GET', durl, undefined, adminToken);
+    ok('stored pdf served back byte-for-byte', r.status === 200 && r.raw === PDFBYTES, 'len=' + (r.raw || '').length);
+    r = await request('POST', '/api/upload', { dataUrl: 'data:application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;base64,' + Buffer.from('xlsx').toString('base64'), name: 'd.xlsx' }, adminToken);
+    ok('xlsx stored as .xlsx', r.status === 200 && /\.xlsx$/.test((r.body || {}).url || ''), JSON.stringify(r.body));
+    r = await request('POST', '/api/upload', { dataUrl: 'data:text/html;base64,' + Buffer.from('<script>x</script>').toString('base64'), name: 'x.html' }, adminToken);
+    eq('non-media upload (html) -> 400', r.status, 400);
 
     // 21. executive dashboard (RAG vs targets)
     r = await request('GET', '/api/exec', undefined, adminToken);
