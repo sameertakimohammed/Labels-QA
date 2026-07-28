@@ -1169,11 +1169,19 @@ async function chkPhoto(ev, key){
   const f=ev.target.files[0]; if(!f)return; ev.target.value='';
   const dataUrl=await new Promise(r=>{ const fr=new FileReader(); fr.onload=()=>r(fr.result); fr.readAsDataURL(f); });
   try{ const res=await api("/api/upload",{method:"POST",body:{dataUrl,name:f.name}});
-    if(key){ const r=window._chkResp[key]; r.photos=r.photos||[]; r.photos.push(res.url); const c=document.getElementById('cph_'+key); if(c)c.textContent=r.photos.length; }
+    if(key){ const r=window._chkResp[key]; r.photos=r.photos||[]; r.photos.push(res.url); renderChkItemAtts(key); }
     else { window._chkPhotos.push(res.url); renderChkThumbs(); }
     toast("Photo added");
   }catch(e){ toast("Upload failed (offline?)"); }
 }
+/* per-item photo strip in the checklist entry form: mini thumbs with a remove button */
+function renderChkItemAtts(key){
+  const host=document.getElementById('catt_'+key); const r=(window._chkResp||{})[key]; if(!host||!r)return;
+  host.innerHTML=(r.photos||[]).map((u,i)=>`<span class="att att-sm"><img src="${esc(u)}"><button class="att-x no-print" title="Remove photo" onclick="removeChkItemPhoto('${jsq(key)}',${i})">×</button></span>`).join("");
+  const c=document.getElementById('cph_'+key); if(c)c.textContent=(r.photos||[]).length;
+}
+function removeChkItemPhoto(key,i){ const r=(window._chkResp||{})[key]; if(!r||!(r.photos||[])[i])return;
+  if(!confirm("Remove this photo from the item?")) return; r.photos.splice(i,1); renderChkItemAtts(key); }
 async function checklistsPage(){
   app().innerHTML=`<div class="empty">Loading…</div>`;
   let defs=[], subs=[], due=[];
@@ -1263,7 +1271,7 @@ function chkPick(){
   const camCell=k=>`<label class="btn ghost sm" style="cursor:pointer" title="Attach photo">📷 <span id="cph_${esc(k)}">0</span><input type="file" accept="image/*" capture="environment" style="display:none" onchange="chkPhoto(event,'${jsq(k)}')"></label>`;
   const rows=def.items.map(it=>{
     if(it.header) return `<tr><td colspan="${cols}" style="background:var(--panel-2,#eef2f5);font-weight:700">${esc(it.label)}</td></tr>`;
-    return `<tr><td style="max-width:480px">${esc(it.label)}</td><td><select onchange="window._chkResp['${jsq(it.key)}'].status=this.value">${opts.map(o=>`<option value="${esc(o)}">${o?esc(o):'—'}</option>`).join("")}</select></td>${def.hasCorrectiveAction?`<td><input oninput="window._chkResp['${jsq(it.key)}'].correctiveAction=this.value" placeholder="Corrective action / comment"></td>`:''}<td class="no-print">${camCell(it.key)}</td></tr>`;
+    return `<tr><td style="max-width:480px">${esc(it.label)}</td><td><select onchange="window._chkResp['${jsq(it.key)}'].status=this.value">${opts.map(o=>`<option value="${esc(o)}">${o?esc(o):'—'}</option>`).join("")}</select></td>${def.hasCorrectiveAction?`<td><input oninput="window._chkResp['${jsq(it.key)}'].correctiveAction=this.value" placeholder="Corrective action / comment"></td>`:''}<td class="no-print">${camCell(it.key)}<span class="item-atts" id="catt_${esc(it.key)}"></span></td></tr>`;
   }).join("");
   host.innerHTML=`<div style="border-top:1px solid var(--line);margin-top:12px;padding-top:12px">
     <div class="grid g3">
