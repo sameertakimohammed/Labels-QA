@@ -728,7 +728,7 @@ function send(res, code, obj, headers) {
   // save still in flight. Terminal handlers use `return send(...)`, so first send wins.
   if (!res._resp && !res.headersSent) res._resp = { code, body, headers: hdrs };
 }
-const MIME = { '.html':'text/html; charset=utf-8','.js':'text/javascript; charset=utf-8','.css':'text/css; charset=utf-8','.json':'application/json','.webmanifest':'application/manifest+json','.png':'image/png','.jpg':'image/jpeg','.jpeg':'image/jpeg','.svg':'image/svg+xml','.ico':'image/x-icon' };
+const MIME = { '.html':'text/html; charset=utf-8','.js':'text/javascript; charset=utf-8','.css':'text/css; charset=utf-8','.json':'application/json','.webmanifest':'application/manifest+json','.png':'image/png','.jpg':'image/jpeg','.jpeg':'image/jpeg','.svg':'image/svg+xml','.ico':'image/x-icon','.mp4':'video/mp4','.webm':'video/webm','.mov':'video/quicktime','.m4v':'video/x-m4v','.3gp':'video/3gpp' };
 function serveStatic(res, filePath) {
   return new Promise((resolve) => {
     fs.readFile(filePath, (err, buf) => {
@@ -738,7 +738,8 @@ function serveStatic(res, filePath) {
     });
   });
 }
-function readBody(req) {
+function readBody(req, maxBytes) {
+  const cap = maxBytes || 25*1024*1024; // default 25MB; the media upload route allows more
   // Vercel's Node runtime can pre-buffer/parse the request body; use it if already present,
   // otherwise read the raw stream (local / long-running server).
   if (req.body != null) {
@@ -746,7 +747,7 @@ function readBody(req) {
     if (Buffer.isBuffer(req.body)) { try { return Promise.resolve(JSON.parse(req.body.toString('utf8') || '{}')); } catch (e) { return Promise.resolve({}); } }
     if (typeof req.body === 'object') return Promise.resolve(req.body);
   }
-  return new Promise((resolve)=>{ let d=''; req.on('data',c=>{ d+=c; if(d.length>25*1024*1024) req.destroy(); }); req.on('end',()=>{ try{ resolve(d?JSON.parse(d):{}); }catch(e){ resolve({}); } }); });
+  return new Promise((resolve)=>{ let d=''; req.on('data',c=>{ d+=c; if(d.length>cap) req.destroy(); }); req.on('end',()=>{ try{ resolve(d?JSON.parse(d):{}); }catch(e){ resolve({}); } }); });
 }
 function csvCell(v){ v=(v==null?'':String(v)); if(/^[=+\-@\t\r]/.test(v)) v="'"+v; return /[",\r\n]/.test(v)?'"'+v.replace(/"/g,'""')+'"':v; }
 /* Block obvious SSRF targets for admin-configured outbound URLs (webhooks/Teams): loopback,
@@ -998,22 +999,27 @@ async function api(req, res, url) {
     delete j.statusOverride; audit(user,'release',j.jobNo,b.reason||'hold cleared'); if(jobStatus(j)==='Released') fireEvent('job.released',{ jobNo:j.jobNo, product:j.product }); saveDB(); return send(res,200,j);
   }
 
-  if (seg[0]==='upload' && method==='POST') { // {dataUrl, name}
-    const b = await readBody(req); const m=/^data:(image\/\w+);base64,(.+)$/.exec(b.dataUrl||'');
-    if(!m) return send(res,400,{error:'Invalid image data'});
-    const ext = m[1]==='image/png'?'.png':'.jpg'; const contentType = m[1];
+  if (seg[0]==='upload' && method==='POST') { // {dataUrl, name} — photo or a short video clip
+    const b = await readBody(req, 64*1024*1024); // videos: ~45MB file → ~60MB base64 JSON
+    const m=/^data:(image\/\w+|video\/(?:mp4|webm|quicktime|x-m4v|3gpp2?));base64,(.+)$/.exec(b.dataUrl||'');
+    if(!m) return send(res,400,{error:'Invalid media — upload a photo (JPG/PNG) or a video clip (MP4/WebM/MOV)'});
+    const isVideo = m[1].startsWith('video/');
+    const VIDEO_EXT = { 'video/mp4':'.mp4','video/webm':'.webm','video/quicktime':'.mov','video/x-m4v':'.m4v','video/3gpp':'.3gp','video/3gpp2':'.3gp' };
+    const ext = isVideo ? (VIDEO_EXT[m[1]]||'.mp4') : (m[1]==='image/png'?'.png':'.jpg');
+    const contentType = m[1];
     const fn = Date.now()+'-'+crypto.randomBytes(4).toString('hex')+ext;
     const buf = Buffer.from(m[2],'base64');
+    if(isVideo && buf.length>45*1024*1024) return send(res,400,{error:'Video too large — keep clips under 45 MB (about 30 seconds)'});
     let uploadUrl;
     if (SS.isEnabled()) { // cloud: store in Supabase Storage, keep the returned public URL
       const r = await SS.upload(fn, buf, contentType);
-      if(!r.ok) return send(res,502,{error:'Photo upload failed: '+(r.error||'storage error')});
+      if(!r.ok) return send(res,502,{error:(isVideo?'Video':'Photo')+' upload failed: '+(r.error||'storage error')});
       uploadUrl = r.url;
     } else { // local/dev: write to disk under data/uploads and serve from /uploads/
       try { fs.writeFileSync(path.join(UP_DIR,fn), buf); } catch(e){ return send(res,500,{error:'Cannot store upload: '+(e&&e.message||e)}); }
       uploadUrl = '/uploads/'+fn;
     }
-    audit(user,'upload-photo','',fn); saveDB();
+    audit(user,isVideo?'upload-video':'upload-photo','',fn); saveDB();
     return send(res,200,{ url:uploadUrl });
   }
 

@@ -253,7 +253,7 @@ All endpoints are under `/api`. Auth: `x-token: <session>` (login) or `x-api-key
 | `POST /api/jobs/:no/restore` | Restore an archived job | QM |
 | `PUT /api/jobs/:no/stage/:n` | Save/complete a stage | authed (+competency) |
 | `POST /api/jobs/:no/hold` | Place on hold | Supervisor |
-| `POST /api/upload` | Photo/signature upload | authed |
+| `POST /api/upload` | Photo/video/signature upload (video ≤ 45 MB) | authed |
 | `GET/POST/PUT /api/capas[/:id]` | CAPA list/create/update (`GET ?archived=1` lists archived) | view: authed · write: Supervisor |
 | `DELETE /api/capas/:id` · `POST /api/capas/:id/restore` | Archive (hide, keep record) · restore | Supervisor |
 | `GET/POST/PUT /api/ncrs[/:id]` · `POST /api/ncrs/:id/capa` | NCR + promote (`GET ?archived=1` lists archived) | view: authed · write: Supervisor |

@@ -481,6 +481,23 @@ async function main() {
     r = await request('POST', '/api/equipment/' + encodeURIComponent(arcId) + '/restore', undefined, adminToken);
     eq('restore a non-archived item -> 409', r.status, 409);
 
+    // 20c. media uploads — every stage can attach a photo or a short video clip
+    const PNG1 = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
+    r = await request('POST', '/api/upload', { dataUrl: PNG1, name: 'p.png' }, adminToken);
+    eq('upload photo -> 200', r.status, 200);
+    ok('photo stored under /uploads as .png', /^\/uploads\/[\w.-]+\.png$/.test((r.body || {}).url || ''), JSON.stringify(r.body));
+    const VIDBYTES = 'smoke-video-bytes-' + PID;
+    r = await request('POST', '/api/upload', { dataUrl: 'data:video/mp4;base64,' + Buffer.from(VIDBYTES).toString('base64'), name: 'v.mp4' }, adminToken);
+    eq('upload video (mp4) -> 200', r.status, 200);
+    const vurl = (r.body || {}).url || '';
+    ok('video stored under /uploads as .mp4', /^\/uploads\/[\w.-]+\.mp4$/.test(vurl), JSON.stringify(r.body));
+    r = await request('GET', vurl, undefined, adminToken);
+    ok('stored video served back byte-for-byte', r.status === 200 && r.raw === VIDBYTES, 'len=' + (r.raw || '').length);
+    r = await request('POST', '/api/upload', { dataUrl: 'data:video/quicktime;base64,' + Buffer.from('mov').toString('base64'), name: 'v.mov' }, adminToken);
+    ok('quicktime stored as .mov', r.status === 200 && /\.mov$/.test((r.body || {}).url || ''), JSON.stringify(r.body));
+    r = await request('POST', '/api/upload', { dataUrl: 'data:application/pdf;base64,' + Buffer.from('nope').toString('base64'), name: 'x.pdf' }, adminToken);
+    eq('non image/video upload -> 400', r.status, 400);
+
     // 21. executive dashboard (RAG vs targets)
     r = await request('GET', '/api/exec', undefined, adminToken);
     eq('GET /api/exec -> 200', r.status, 200);
