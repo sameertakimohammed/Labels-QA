@@ -389,7 +389,8 @@ function issueToken(u){ return signToken({ uid:u.id, name:u.name, role:u.role, t
 function userByToken(req) {
   const t=(req.headers['authorization']||'').replace(/^Bearer /,'') || req.headers['x-token']; const p=verifyTokenStr(t); if(!p) return null;
   const dbu = DB.users.find(u=>u.id===p.uid);
-  if(dbu){ if(dbu.passHash && p.tv && p.tv!==tokenVer(dbu)) return null; return dbu; } // stale after password change
+  if(dbu){ if(dbu.archived) return null; // archiving an account kills its live sessions immediately
+    if(dbu.passHash && p.tv && p.tv!==tokenVer(dbu)) return null; return dbu; } // stale after password change
   return { id:p.uid, name:p.name, role:p.role }; // SSO identity not persisted to DB.users
 }
 function alertAll(title, text){ try{ NOTIFY.alert(CFG, title, text); }catch(e){} EMAIL.send(CFG, { subject:title, text:text }).then(r=>{ if(r && !r.ok && r.error!=='email disabled') console.log('EMAIL send:', r.error); }).catch(()=>{}); }
@@ -504,7 +505,7 @@ function cleanTemplate(b){ const machines=(DB.masterdata&&DB.masterdata.machines
 }
 /* Most specific template whose (machine, productType) keys match the job (empty key = wildcard). */
 function bestTemplate(machine, productType){
-  const cands=(DB.templates||[]).filter(t=>(!t.machine||t.machine===machine)&&(!t.productType||t.productType===productType));
+  const cands=(DB.templates||[]).filter(t=>!t.archived&&(!t.machine||t.machine===machine)&&(!t.productType||t.productType===productType));
   if(!cands.length) return null;
   cands.sort((a,b)=>{ const sa=(a.machine?1:0)+(a.productType?1:0), sb=(b.machine?1:0)+(b.productType?1:0); if(sb!==sa) return sb-sa; return String(b.updatedAt||'').localeCompare(String(a.updatedAt||'')); });
   return cands[0];
@@ -664,7 +665,7 @@ function checklistDue(def){
   return Object.assign(base,{ period:today, dueByHour:by, status: doneToday?'done':(nowHourLocal()>=by?'overdue':'due') });
 }
 function nowHourLocal(){ try{ return Number(new Intl.DateTimeFormat('en-GB',{ timeZone:APP_TZ, hour:'2-digit', hour12:false }).format(new Date()))%24; }catch(e){ return new Date().getHours(); } }
-function checklistsDue(){ return (DB.checklistDefs||[]).filter(d=>d.active!==false).map(checklistDue); }
+function checklistsDue(){ return (DB.checklistDefs||[]).filter(d=>!d.archived && d.active!==false).map(checklistDue); }
 
 /* date helpers (YYYY-MM-DD). "Today" is resolved in the plant's local timezone (TZ env or
    config.timezone, default Pacific/Fiji) so overdue/due-soon logic matches the shop floor and
@@ -806,6 +807,7 @@ async function api(req, res, url) {
       const email = String(r.email||'').toLowerCase();
       const u = DB.users.find(x => x.email && String(x.email).toLowerCase()===email);
       if (!u) { audit(null,'login-denied','', email+' (Clerk: no matching Golden QA user)'); saveDB(); return send(res,403,{error:'Your account ('+email+') is not authorised for Golden QA. Ask an administrator to add your e-mail under Admin → Users.'}); }
+      if (u.archived) { audit(null,'login-denied','', email+' (archived account)'); saveDB(); return send(res,403,{error:'This account has been removed. Ask an administrator to restore it under Team & Access.'}); }
       if (r.name && !u.name) u.name = r.name;
       u.lastLogin = new Date().toISOString();
       audit(u,'login','','via Clerk'); saveDB();
@@ -837,6 +839,7 @@ async function api(req, res, url) {
     const localU = DB.users.find(x=>x.id===username && x.source!=='ad' && x.passHash);
     if (localU) {
       if (!checkPw(localU, password)) { recordFail(''); return send(res,401,{error:'Invalid username or password'}); }
+      if (localU.archived) { audit(null,'login-denied','', username+' (archived account)'); saveDB(); return send(res,403,{error:'This account has been removed. Ask an administrator to restore it under Team & Access.'}); }
       loginClear(key); audit(localU,'login'); return send(res,200,{ token:issueToken(localU), user:pubUser(localU) });
     }
     // Otherwise authenticate against local Active Directory (if configured).
@@ -845,6 +848,8 @@ async function api(req, res, url) {
       if (!r.ok) { recordFail(' (AD)'); return send(res,401,{error:'Invalid username or password'}); }
       const role = LDAP.mapRole(CFG, r.user.groups);
       if (!role) { audit(null,'login-denied','', username+' (AD: no Golden QA access group)'); saveDB(); return send(res,403,{error:'Your account is not authorized for Golden QA. Ask an administrator to add you to a Golden QA access group.'}); }
+      const adExisting = DB.users.find(x=>x.id===r.user.id);
+      if (adExisting && adExisting.archived) { audit(null,'login-denied','', username+' (archived account)'); saveDB(); return send(res,403,{error:'This account has been removed. Ask an administrator to restore it under Team & Access.'}); }
       const u = upsertDirectoryUser(r.user, role, LDAP.mapStages(CFG, r.user.groups));
       loginClear(key); audit(u,'login','','via Active Directory'); saveDB();
       return send(res,200,{ token:issueToken(u), user:pubUser(u) });
@@ -1017,8 +1022,17 @@ async function api(req, res, url) {
 
   if (seg[0]==='admin' && seg[1]==='users') {
     const uid = seg[2] ? decodeURIComponent(seg[2]).toLowerCase() : null;
-    if(method==='GET'){ if(!isManager(user)) return send(res,403,{error:'Not permitted'}); return send(res,200, DB.users.map(pubUser)); }
+    if(method==='GET'){ if(!isManager(user)) return send(res,403,{error:'Not permitted'});
+      const arch=url.searchParams.get('archived')==='1';
+      return send(res,200, DB.users.filter(u=>arch?u.archived:!u.archived).map(pubUser)); }
     if(!canManageUsers(user)) return send(res,403,{error:'Only a Quality Manager or Administrator can manage users'});
+    if(uid && seg[3]==='restore' && method==='POST'){
+      const u=DB.users.find(x=>x.id===uid); if(!u) return send(res,404,{error:'User not found'});
+      if(!u.archived) return send(res,409,{error:'User is not archived'});
+      if(u.role==='Administrator' && !isAdmin(user)) return send(res,403,{error:'Only an Administrator can restore an Administrator account'});
+      delete u.archived; delete u.archivedAt; delete u.archivedBy;
+      audit(user,'user-restore','',uid); saveDB(); return send(res,200,{ ok:true, users:DB.users.filter(x=>!x.archived).map(pubUser) });
+    }
     if(method==='POST'){
       const b=await readBody(req);
       const id=String(b.id||'').trim().toLowerCase().replace(/[^a-z0-9._-]/g,'');
@@ -1028,7 +1042,8 @@ async function api(req, res, url) {
       // Role ceiling: only an Administrator may create another Administrator.
       if(role==='Administrator' && !isAdmin(user)) return send(res,403,{error:'Only an Administrator can create an Administrator'});
       if(String(b.password||'').length<6) return send(res,400,{error:'Password must be at least 6 characters'});
-      if(DB.users.find(u=>u.id===id)) return send(res,409,{error:'A user with that id already exists'});
+      const dupU=DB.users.find(u=>u.id===id);
+      if(dupU) return send(res,409,{error:dupU.archived?'A user with that id exists in the archive — restore it instead':'A user with that id already exists'});
       const email=String(b.email||'').trim().toLowerCase();
       if(email && !EMAIL_RE.test(email)) return send(res,400,{error:'Invalid e-mail address'});
       if(email && DB.users.find(u=>u.email && u.email===email)) return send(res,409,{error:'Another user already has that e-mail'});
@@ -1038,6 +1053,7 @@ async function api(req, res, url) {
     }
     if(uid && method==='PUT'){
       const b=await readBody(req); const u=DB.users.find(x=>x.id===uid); if(!u) return send(res,404,{error:'User not found'});
+      if(u.archived) return send(res,409,{error:'User is archived — restore it first'});
       // Only an Administrator may modify an existing Administrator account.
       if(u.role==='Administrator' && !isAdmin(user)) return send(res,403,{error:'Only an Administrator can modify an Administrator account'});
       const newRole=String(b.role||'').trim();
@@ -1053,12 +1069,16 @@ async function api(req, res, url) {
       if(b.password){ if(String(b.password).length<6) return send(res,400,{error:'Password must be at least 6 characters'}); u.salt=crypto.randomBytes(16).toString('hex'); u.passHash=hashPw(String(b.password),u.salt); }
       audit(user,'update-user','',uid); saveDB(); return send(res,200,{ ok:true, users:DB.users.map(pubUser) });
     }
+    // DELETE = archive: the account is disabled (sign-in blocked, live sessions killed) but kept,
+    // so the audit trail's user ids stay resolvable and the account can be restored.
     if(uid && method==='DELETE'){
       if(uid===user.id) return send(res,400,{error:'You cannot delete your own account'});
-      const i=DB.users.findIndex(x=>x.id===uid); if(i<0) return send(res,404,{error:'User not found'});
-      if(DB.users[i].role==='Administrator' && !isAdmin(user)) return send(res,403,{error:'Only an Administrator can delete an Administrator account'});
-      if(DB.users.length<=1) return send(res,400,{error:'Cannot delete the last remaining user'});
-      DB.users.splice(i,1); audit(user,'delete-user','',uid); saveDB(); return send(res,200,{ ok:true, users:DB.users.map(pubUser) });
+      const u=DB.users.find(x=>x.id===uid); if(!u) return send(res,404,{error:'User not found'});
+      if(u.archived) return send(res,409,{error:'User is already archived'});
+      if(u.role==='Administrator' && !isAdmin(user)) return send(res,403,{error:'Only an Administrator can delete an Administrator account'});
+      if(DB.users.filter(x=>!x.archived).length<=1) return send(res,400,{error:'Cannot delete the last remaining user'});
+      u.archived=true; u.archivedAt=new Date().toISOString(); u.archivedBy=user.id;
+      audit(user,'user-archive','',uid); saveDB(); return send(res,200,{ ok:true, users:DB.users.filter(x=>!x.archived).map(pubUser) });
     }
     return send(res,405,{error:'Method not allowed'});
   }
@@ -1374,7 +1394,8 @@ async function api(req, res, url) {
 
   if (seg[0]==='templates' && method==='GET' && !seg[1]) {
     if(!isManager(user)) return send(res,403,{error:'Not permitted'});
-    return send(res,200, DB.templates||[]);
+    const arch=url.searchParams.get('archived')==='1';
+    return send(res,200, (DB.templates||[]).filter(t=>arch?t.archived:!t.archived));
   }
   if (seg[0]==='templates' && method==='POST' && !seg[1]) {
     if(!isManager(user)) return send(res,403,{error:'Only a Supervisor, Quality Manager or Administrator can manage templates'});
@@ -1386,17 +1407,31 @@ async function api(req, res, url) {
   if (seg[0]==='templates' && seg[1] && method==='PUT') {
     if(!isManager(user)) return send(res,403,{error:'Only a Supervisor, Quality Manager or Administrator can manage templates'});
     const t=(DB.templates||[]).find(x=>x.id===decodeURIComponent(seg[1])); if(!t) return send(res,404,{error:'Template not found'});
+    if(t.archived) return send(res,409,{error:'Template is archived — restore it first'});
     const c=cleanTemplate(await readBody(req)); if(!c.name) return send(res,400,{error:'Template name is required'});
     Object.assign(t, c, { updatedAt:new Date().toISOString() }); audit(user,'template-update','',t.id); saveDB(); return send(res,200,t);
   }
-  if (seg[0]==='templates' && seg[1] && method==='DELETE') {
+  // DELETE = archive: the template stops matching new jobs and leaves the list, but is restorable.
+  if (seg[0]==='templates' && seg[1] && !seg[2] && method==='DELETE') {
     if(!isManager(user)) return send(res,403,{error:'Only a Supervisor, Quality Manager or Administrator can manage templates'});
-    const i=(DB.templates||[]).findIndex(x=>x.id===decodeURIComponent(seg[1])); if(i<0) return send(res,404,{error:'Template not found'});
-    const removed=DB.templates.splice(i,1)[0]; audit(user,'template-delete','',removed.id); saveDB(); return send(res,200,{ ok:true });
+    const t=(DB.templates||[]).find(x=>x.id===decodeURIComponent(seg[1])); if(!t) return send(res,404,{error:'Template not found'});
+    if(t.archived) return send(res,409,{error:'Template is already archived'});
+    t.archived=true; t.archivedAt=new Date().toISOString(); t.archivedBy=user.id;
+    audit(user,'template-archive','',t.id+': '+t.name); saveDB(); return send(res,200,{ ok:true });
+  }
+  if (seg[0]==='templates' && seg[1] && seg[2]==='restore' && method==='POST') {
+    if(!isManager(user)) return send(res,403,{error:'Only a Supervisor, Quality Manager or Administrator can manage templates'});
+    const t=(DB.templates||[]).find(x=>x.id===decodeURIComponent(seg[1])); if(!t) return send(res,404,{error:'Template not found'});
+    if(!t.archived) return send(res,409,{error:'Template is not archived'});
+    delete t.archived; delete t.archivedAt; delete t.archivedBy; t.updatedAt=new Date().toISOString();
+    audit(user,'template-restore','',t.id+': '+t.name); saveDB(); return send(res,200,{ ok:true });
   }
 
   /* ----- Checklist DEFINITIONS (admin-managed form templates) ----- */
-  if (seg[0]==='checklist-defs' && method==='GET' && !seg[1]) return send(res,200, DB.checklistDefs||[]);
+  if (seg[0]==='checklist-defs' && method==='GET' && !seg[1]) {
+    const arch=url.searchParams.get('archived')==='1';
+    return send(res,200, (DB.checklistDefs||[]).filter(d=>arch?d.archived:!d.archived));
+  }
   if (seg[0]==='checklist-defs' && method==='POST' && !seg[1]) {
     if(!isManager(user)) return send(res,403,{error:'Only a Supervisor, Quality Manager or Administrator can manage checklist forms'});
     const c=cleanChecklistDef(await readBody(req)); if(!c.title) return send(res,400,{error:'A checklist title is required'});
@@ -1407,14 +1442,26 @@ async function api(req, res, url) {
   if (seg[0]==='checklist-defs' && seg[1] && method==='PUT') {
     if(!isManager(user)) return send(res,403,{error:'Only a Supervisor, Quality Manager or Administrator can manage checklist forms'});
     const d=(DB.checklistDefs||[]).find(x=>x.id===decodeURIComponent(seg[1])); if(!d) return send(res,404,{error:'Checklist form not found'});
+    if(d.archived) return send(res,409,{error:'Checklist form is archived — restore it first'});
     const before=JSON.parse(JSON.stringify(d)); const c=cleanChecklistDef(await readBody(req)); if(!c.title) return send(res,400,{error:'A checklist title is required'});
     Object.assign(d, c, { updatedAt:new Date().toISOString() });
     audit(user,'checklist-def-update',{ recordType:'checklist-def', recordId:d.id, detail:d.code+': '+d.title, changes:auditDiff(before, d) }); saveDB(); return send(res,200,d);
   }
-  if (seg[0]==='checklist-defs' && seg[1] && method==='DELETE') {
+  // DELETE = archive: the form leaves the pickers and due tracking but past submissions keep
+  // working and the definition can be restored.
+  if (seg[0]==='checklist-defs' && seg[1] && !seg[2] && method==='DELETE') {
     if(!isManager(user)) return send(res,403,{error:'Only a Supervisor, Quality Manager or Administrator can manage checklist forms'});
-    const i=(DB.checklistDefs||[]).findIndex(x=>x.id===decodeURIComponent(seg[1])); if(i<0) return send(res,404,{error:'Checklist form not found'});
-    const removed=DB.checklistDefs.splice(i,1)[0]; audit(user,'checklist-def-delete',{ recordType:'checklist-def', recordId:removed.id, detail:removed.code }); saveDB(); return send(res,200,{ ok:true });
+    const d=(DB.checklistDefs||[]).find(x=>x.id===decodeURIComponent(seg[1])); if(!d) return send(res,404,{error:'Checklist form not found'});
+    if(d.archived) return send(res,409,{error:'Checklist form is already archived'});
+    d.archived=true; d.archivedAt=new Date().toISOString(); d.archivedBy=user.id;
+    audit(user,'checklist-def-archive',{ recordType:'checklist-def', recordId:d.id, detail:d.code }); saveDB(); return send(res,200,{ ok:true });
+  }
+  if (seg[0]==='checklist-defs' && seg[1] && seg[2]==='restore' && method==='POST') {
+    if(!isManager(user)) return send(res,403,{error:'Only a Supervisor, Quality Manager or Administrator can manage checklist forms'});
+    const d=(DB.checklistDefs||[]).find(x=>x.id===decodeURIComponent(seg[1])); if(!d) return send(res,404,{error:'Checklist form not found'});
+    if(!d.archived) return send(res,409,{error:'Checklist form is not archived'});
+    delete d.archived; delete d.archivedAt; delete d.archivedBy; d.updatedAt=new Date().toISOString();
+    audit(user,'checklist-def-restore',{ recordType:'checklist-def', recordId:d.id, detail:d.code }); saveDB(); return send(res,200,{ ok:true });
   }
 
   /* ----- Checklist SUBMISSIONS (dated records, two-person sign-off) ----- */
@@ -1535,7 +1582,7 @@ async function api(req, res, url) {
 
   return send(res,404,{error:'Unknown API route'});
 }
-function pubUser(u){ return { id:u.id, name:u.name, role:u.role, qualifiedStages:Array.isArray(u.qualifiedStages)?u.qualifiedStages:[], email:u.email||'', source:u.source||'local' }; }
+function pubUser(u){ return { id:u.id, name:u.name, role:u.role, qualifiedStages:Array.isArray(u.qualifiedStages)?u.qualifiedStages:[], email:u.email||'', source:u.source||'local', archived:!!u.archived }; }
 /* Resolve a verified SSO e-mail to a user: known users keep their role; unknown domain
    users get least-privilege QA Officer (carried in the signed token, not persisted to DB). */
 /* Map a verified SSO e-mail to a local account by its EXPLICIT email field only — never by the
