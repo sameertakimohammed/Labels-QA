@@ -23,6 +23,20 @@ reference see [SYSTEM-GUIDE.md](SYSTEM-GUIDE.md); for structured training see
 **My Account → Change password.** Enter current + new (min 6 characters) twice. (Microsoft 365
 accounts manage their password in Microsoft, not here.)
 
+### A4. Forgot your password
+Ask an Administrator to set a new one in **Admin → Users**. If **no** admin can sign in (e.g. the
+only admin forgot theirs), someone with access to the Docker host runs the break-glass reset inside
+the app container — it prompts for the new password and works while the app is running:
+
+```sh
+docker exec -it -u node <app-container> node scripts/reset-password.js --list      # show usernames
+docker exec -it -u node <app-container> node scripts/reset-password.js admin       # set a new password
+```
+
+Local accounts only (AD / Microsoft 365 users reset in the directory). Existing sessions for that
+user are signed out and the reset is recorded in the audit log. Note: changing `ADMIN_PASSWORD` in
+the stack env does **not** reset anything — it only seeds the admin on a brand-new database.
+
 ---
 
 ## B. Inspection workflow
@@ -153,7 +167,7 @@ safety backup of current data is taken first. **This replaces all live data.**
 
 | Symptom | Cause & fix |
 |---|---|
-| **"Too many failed attempts… try again in N min"** (429) | Login lockout after repeated wrong passwords. Wait out the cool-off, or an admin can restart the app (the throttle is in-memory). |
+| **"Too many failed attempts… try again in N min"** (429) | Login lockout after repeated wrong passwords. Wait out the cool-off, or an admin can restart the app (the throttle is in-memory). Forgot it entirely? See **A4**. |
 | **"Not qualified to sign off Stage N"** (403) | Competency enforcement is on and you aren't qualified for that stage. An admin adds the stage in **Team & Access**, or an Administrator signs off. |
 | **Charts are blank / "Charts need internet"** | Chart.js loads from a CDN on first use. Open the app online once; it's then cached for offline. |
 | **Camera/scan doesn't work** | The camera needs **HTTPS**. Use the `https://` site (Traefik/Caddy), not plain `http://<ip>`. |

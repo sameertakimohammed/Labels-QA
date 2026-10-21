@@ -49,8 +49,8 @@ jobs:
       - name: Syntax check (node --check)
         run: |
           set -euo pipefail
-          # Parse-only check of server.js plus every .js under integrations/, public/, test/.
-          files=$(find server.js integrations public test -type f -name '*.js')
+          # Parse-only check of server.js plus every .js under integrations/, public/, scripts/, test/.
+          files=$(find server.js integrations public scripts test -type f -name '*.js')
           echo "Checking the following files:"
           echo "$files"
           for f in $files; do
@@ -106,6 +106,15 @@ jobs:
             echo "waiting for app readiness ($i/40)..."; sleep 3
           done
           echo "app did not become ready in time"; exit 1
+
+      - name: Break-glass password reset (scripts/reset-password.js on Postgres)
+        run: |
+          set -euo pipefail
+          printf 'ci-reset-password' | docker compose -f docker-compose.yml exec -T -u node app node scripts/reset-password.js admin
+          login() { curl -s -o /dev/null -w '%{http_code}' -X POST http://localhost:3000/api/login -H 'Content-Type: application/json' -d "{\"username\":\"admin\",\"password\":\"$1\"}"; }
+          test "$(login ci-admin-password)" = 401
+          test "$(login ci-reset-password)" = 200
+          echo "reset-password works against Postgres."
 
       - name: Dump logs on failure
         if: failure()

@@ -42,7 +42,7 @@ Linux: `systemd` or `pm2`). See section 7.
 | `akumar` | A. Kumar | QA Officer | `kumar123` |
 | `pdevi` | P. Devi | QA Officer | `devi123` |
 
-Passwords are salted and hashed with **scrypt**. Change them in **Admin → Users**. For production, wire the app to your **local Active Directory** so staff sign in with their domain accounts (see [deploy/AD-SSO-SETUP.md](deploy/AD-SSO-SETUP.md)); the seeded admin above stays as a local break-glass account.
+Passwords are salted and hashed with **scrypt**. Change them in **Admin → Users**. For production, wire the app to your **local Active Directory** so staff sign in with their domain accounts (see [deploy/AD-SSO-SETUP.md](deploy/AD-SSO-SETUP.md)); the seeded admin above stays as a local break-glass account. Locked out of every admin account? Run `node scripts/reset-password.js <username>` inside the app container (see [Knowledge Base A4](docs/KNOWLEDGE-BASE.md)).
 
 ---
 
