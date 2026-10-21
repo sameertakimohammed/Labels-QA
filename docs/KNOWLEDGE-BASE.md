@@ -33,6 +33,17 @@ docker exec -it -u node <app-container> node scripts/reset-password.js --list   
 docker exec -it -u node <app-container> node scripts/reset-password.js admin       # set a new password
 ```
 
+**Vercel + Supabase:** there is no container to exec into, so run it from any computer with Node 18+
+and a clone of this repo. Copy `DATABASE_URL` (Supabase session pooler, port 5432) and `SECRET_KEY`
+from Vercel → Project → Settings → Environment Variables (and `PG_STATE_TABLE` if you set one):
+
+```sh
+npm ci
+DATABASE_URL='postgresql://…:5432/postgres' SECRET_KEY='…' node scripts/reset-password.js --list
+DATABASE_URL='postgresql://…:5432/postgres' SECRET_KEY='…' node scripts/reset-password.js admin
+```
+
+Use the same `SECRET_KEY` as production, or the audit chain check will flag the reset entry.
 Local accounts only (AD / Microsoft 365 users reset in the directory). Existing sessions for that
 user are signed out and the reset is recorded in the audit log. Note: changing `ADMIN_PASSWORD` in
 the stack env does **not** reset anything — it only seeds the admin on a brand-new database.
