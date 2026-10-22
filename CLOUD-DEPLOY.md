@@ -82,6 +82,10 @@ You provide two values from the Supabase dashboard:
 | `ADMIN_PASSWORD` | strong password (**the** local admin login) |
 | `ADMIN_EMAIL` | optional; the e-mail matched to the seed admin if Clerk is re-enabled |
 | `CRON_SECRET` | 48-byte random (authenticates Vercel Cron → `/api/cron`) |
+| `SMTP_HOST` · `SMTP_PORT` · `SMTP_SECURE` · `SMTP_USER` · `SMTP_PASS` · `SMTP_FROM` | *optional* — turns on e-mail: alerts, checklist e-mails and **e-mailed password-reset links**. Without SMTP, *Forgot password?* flags the user as **Reset requested** in Team & Access and a Quality Manager/Administrator hands them a copyable reset link |
+| `APP_URL` | *optional* — public base URL put in e-mailed reset links. Defaults to `https://$VERCEL_PROJECT_PRODUCTION_URL` (a Vercel system variable); set it to pin a specific domain. Never derived from the request `Host` header |
+| `PASSWORD_RESET_MINUTES` · `PASSWORD_RESET_ADMIN_HOURS` | *optional* — reset-link lifetimes (default 30 min for e-mailed links, 24 h for links issued in Team & Access) |
+| `TEAMS_WEBHOOK_URL` · `NOTIFY_EMAIL_TO` | *optional* — push alerts (incl. *Forgot password?* requests that couldn't be e-mailed) to a Teams channel and/or a comma-separated list of manager e-mails (the latter needs `SMTP_*`). Without them **nobody is alerted** — requests only show in Team & Access |
 
 Generate secrets with: `node -e "console.log(require('crypto').randomBytes(48).toString('base64url'))"`
 
@@ -103,6 +107,16 @@ With Clerk off (the default), the sign-in screen shows the **local username + pa
 1. Open the Vercel URL → sign in with `ADMIN_USERNAME` / `ADMIN_PASSWORD`.
 2. Add the rest of your team under **Admin → Users** (username + password + role + stage
    competencies). Existing accounts already in the database stay exactly as they were.
+
+**Forgotten passwords:** users tap **Forgot password?** on the sign-in screen. With no SMTP (the
+current production setup) the request shows as **Reset requested** in **Team & Access**, where a
+Quality Manager/Administrator clicks **Reset link** and hands the person a one-time link (valid 24 h
+by default). Without SMTP or `TEAMS_WEBHOOK_URL` **nobody is alerted** — managers must check Team &
+Access (the user is told to ask them). Even with Teams set, the alert is best-effort on Vercel (it isn't
+awaited before the response, so a frozen function can drop it).
+Add the `SMTP_*` variables above to have links e-mailed automatically to users who have an e-mail
+address. If no admin can sign in at all, use the break-glass script
+([Knowledge Base A4](docs/KNOWLEDGE-BASE.md#a4-forgot-your-password)).
 
 *If you re-enable Clerk (`CLERK_ENABLED=true`):* the Clerk sign-in card appears instead; sign in
 with the account whose e-mail equals `ADMIN_EMAIL`, and the local username/password form stays

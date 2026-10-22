@@ -55,6 +55,12 @@ services:
       NOTIFY_EMAIL_TO: ${NOTIFY_EMAIL_TO:-}
       # Optional Microsoft Teams incoming-webhook URL (mirrors the same alerts).
       TEAMS_WEBHOOK_URL: ${TEAMS_WEBHOOK_URL:-}
+      # Password reset (optional). E-mailed "Forgot password?" links also need SMTP_HOST above and a
+      # public base URL: APP_URL if set, else https://$APP_HOST (the Traefik host below). Blank = defaults.
+      APP_URL: ${APP_URL:-}
+      APP_HOST: ${APP_HOST:-}
+      PASSWORD_RESET_MINUTES: ${PASSWORD_RESET_MINUTES:-}
+      PASSWORD_RESET_ADMIN_HOURS: ${PASSWORD_RESET_ADMIN_HOURS:-}
     volumes:
       # Uploaded photos/signatures - the only app-written persistent data in Postgres mode.
       - goldenqa_uploads:/app/data/uploads

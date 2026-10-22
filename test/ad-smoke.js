@@ -93,6 +93,8 @@ srv.listen(LDAP_PORT, '127.0.0.1', async () => {
     ok('AD user password-change -> 400 (managed in directory)', r.status === 400, r.status + ' ' + JSON.stringify(r.body));
     r = await rq('POST', '/api/login', { username: 'ghost', password: 'x' });
     ok('unknown user -> 401', r.status === 401, String(r.status));
+    r = await rq('GET', '/api/config');
+    ok('config: passwordReset.directory true with AD on (sign-in says IT resets Windows passwords)', !!(r.body.passwordReset && r.body.passwordReset.directory === true), JSON.stringify(r.body.passwordReset));
   } catch (e) { console.log('TEST ERROR:', e.message); fail++; }
 
   console.log('\nAD smoke summary: ' + pass + ' passed, ' + fail + ' failed');

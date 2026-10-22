@@ -88,6 +88,8 @@ const stageName = k => { const s=STAGES.find(x=>x.key===k); return s?s.name:k; }
 
 let TOKEN = localStorage.getItem("gqa_token") || null;
 let ME = null, MD = null;
+let CONFIG = null; // public /api/config, fetched once per page load (it is env-driven; a reload picks up changes)
+async function getConfig(){ if(!CONFIG){ try{ const r=await fetch("/api/config"); if(r.ok) CONFIG=await r.json(); }catch(e){} } return CONFIG||{}; } // a failed fetch isn't cached, so offline boots retry later
 let CUR = { view:"dashboard", jobNo:null, stage:"stage1" };
 let CHARTS = {};
 
@@ -139,7 +141,7 @@ async function api(path, opts={}){
     const r=await fetch(path,{method,headers:hdrs(),body:opts.body?JSON.stringify(opts.body):undefined});
     if(r.status===401 && !path.startsWith("/api/login")){ logout(); throw new Error("Session expired"); }
     const j=await r.json().catch(()=>({}));
-    if(!r.ok) throw new Error(j.error||("HTTP "+r.status));
+    if(!r.ok){ const err=new Error(j.error||("HTTP "+r.status)); err.status=r.status; throw err; } // status lets callers tell a refusal from a network error (none)
     if(method==="GET" && path.startsWith("/api/jobs")) localStorage.setItem("gqa_cache_"+path, JSON.stringify(j));
     return j;
   }catch(e){
@@ -154,16 +156,110 @@ async function api(path, opts={}){
 /* ---------- auth ---------- */
 async function boot(){
   setNet();
+  // A reset link wins over any session saved in this browser (shared floor tablets): whoever holds
+  // the link is the person at the device now.
+  const rt=takeResetToken(); if(rt){ showReset(rt); return; }
   if(TOKEN){ try{ const r=await api("/api/me"); ME=r.user; MD=await api("/api/masterdata"); showApp(); return; }catch(e){ TOKEN=null; } }
   showLogin();
 }
+/* Reset links are <origin>/#reset=<token>: the fragment never reaches the server, logs or Referer.
+   Strip it from the address bar at once so it can't be shoulder-surfed or reached with Back. This does
+   NOT remove it from the browser's global history: an unused link stays usable from there until it
+   expires or the password changes (hence the short TTLs and "finish or close it" in the docs). */
+function takeResetToken(){
+  const h=location.hash||""; if(!h.startsWith("#reset=")) return null;
+  let t=h.slice(7); try{ t=decodeURIComponent(t); }catch(e){}
+  try{ history.replaceState(null,"",location.pathname+location.search); }catch(e){ location.hash=""; }
+  return t.trim()||null;
+}
+// A link pasted into a tab that already has the app open only fires hashchange (no reload).
+window.addEventListener("hashchange",()=>{ const t=takeResetToken(); if(t) showReset(t); });
+/* Which panel of the sign-in card is showing: 'signin' (Clerk / password), 'forgot' or 'reset'. */
+function loginPanel(which){
+  const reset=which==="reset", forgot=which==="forgot";
+  $("#resetBox").classList.toggle("hidden",!reset);
+  ["#clerk-signin","#loginFoot"].forEach(s=>$(s).classList.toggle("hidden",reset));
+  if(reset){ ["#pwBox","#pwToggleWrap","#clerkLoading"].forEach(s=>$(s).classList.add("hidden")); return; } // showLogin() restores these from config
+  $("#pwFields").classList.toggle("hidden",forgot); $("#forgotBox").classList.toggle("hidden",!forgot);
+  $("#forgotForm").classList.remove("hidden"); $("#forgotMsg").classList.add("hidden");
+}
+function showForgot(e){ if(e) e.preventDefault(); loginPanel("forgot");
+  const f=$("#forgotId"), u=$("#loginUser"); if(f){ f.value=(u&&u.value.trim())||""; f.focus(); } }
+function hideForgot(e){ if(e) e.preventDefault(); loginPanel("signin"); const u=$("#loginUser"); if(u) u.focus(); }
+async function doForgot(){
+  // Enter calls this directly, so guard here (not just via the button): every hit counts toward the
+  // per-IP throttle that all tablets behind one public IP share.
+  const btn=$("#forgotBtn"); if(btn.disabled) return;
+  const identifier=$("#forgotId").value.trim().slice(0,200);
+  if(!identifier){ toast("Enter your username or e-mail"); return; }
+  btn.disabled=true;
+  try{
+    await api("/api/password/forgot",{method:"POST",body:{identifier}}); // always the same 200 whether or not the account exists
+    const pr=(await getConfig()).passwordReset||{}; const mins=Number(pr.minutes)||30;
+    const m=$("#forgotMsg");
+    // Must hold for every outcome (unknown names, AD accounts and repeats get the same 200 on purpose),
+    // and without SMTP/Teams nobody is pushed an alert — the request only shows in Team & Access.
+    m.textContent=(pr.email
+      ? "If that account has an e-mail address, we've sent it a reset link (valid "+mins+" minutes). Otherwise ask your Quality Manager or Administrator for a reset link — your request is flagged for them."
+      : "If that is a Golden QA account, your request is now flagged for your managers. Ask your Quality Manager or Administrator for a reset link.")
+      +(pr.directory?" Windows (Active Directory) passwords are reset by IT, not here.":"");
+    $("#forgotForm").classList.add("hidden"); m.classList.remove("hidden");
+  }catch(e){ toast(e.message||"Could not send the request"); } // e.g. 429 Too many requests
+  finally{ btn.disabled=false; }
+}
+async function showReset(token){
+  closeModal(); $("#login").classList.remove("hidden"); $("#appwrap").classList.add("hidden");
+  loginPanel("reset");
+  const msg=$("#resetMsg"), form=$("#resetForm"), back=$("#resetBackWrap"), p1=$("#resetPass"), p2=$("#resetPass2"), save=$("#resetSave"), retry=$("#resetRetry"), backBtn=$("#resetBack");
+  form.classList.add("hidden"); back.classList.add("hidden"); retry.classList.add("hidden"); p1.value=""; p2.value="";
+  msg.className="banner"; msg.textContent="Checking your reset link…";
+  // Leaving without resetting goes back to whatever this browser had (its saved session, else the
+  // sign-in card) — nobody is signed out for changing their mind or for a flaky connection.
+  const leave=(e)=>{ if(e) e.preventDefault(); if(TOKEN) boot(); else showLogin(); };
+  $("#resetCancel").onclick=leave;
+  let who;
+  try{ who=(await api("/api/password/reset/check",{method:"POST",body:{token}})).user||{}; }
+  catch(e){
+    msg.className="banner warn"; back.classList.remove("hidden");
+    if(e.status>=400 && e.status<500){ // the server refused the link (used / expired / bad)
+      msg.textContent=e.message||"This reset link is invalid or has expired. Ask for a new one.";
+      // "Back" drops any session already saved here so the sign-in card (incl. Clerk) starts clean.
+      backBtn.textContent="Back to sign-in"; backBtn.onclick=()=>logout(); return;
+    }
+    // Offline or a server error: the link may well be fine and is still held here, so offer a retry.
+    msg.textContent="Couldn't reach the server to check this link — check your connection and try again.";
+    retry.classList.remove("hidden"); retry.onclick=()=>showReset(token);
+    backBtn.textContent="Back"; backBtn.onclick=leave; return;
+  }
+  msg.innerHTML=`Set a new password for <b>${esc(who.name||who.id)}</b> (${esc(who.id)}).`;
+  $("#resetUser").value=who.id||""; form.classList.remove("hidden"); p1.focus();
+  p1.onkeydown=(e)=>{ if(e.key==="Enter"){ e.preventDefault(); p2.focus(); } };
+  p2.onkeydown=(e)=>{ if(e.key==="Enter"){ e.preventDefault(); save.click(); } };
+  save.onclick=async()=>{
+    const password=p1.value;
+    if(password.length<6){ toast("Password must be at least 6 characters"); return; }
+    if(password!==p2.value){ toast("Passwords don't match"); return; }
+    save.disabled=true; let r;
+    try{ r=await api("/api/password/reset",{method:"POST",body:{token,password}}); }
+    catch(e){ save.disabled=false; toast(e.status?e.message:"Couldn't reach the server — check your connection and try again."); return; }
+    save.disabled=false; p1.value=""; p2.value="";
+    TOKEN=r.token; localStorage.setItem("gqa_token",TOKEN); ME=r.user;
+    try{ MD=await api("/api/masterdata"); showApp(); toast("Password updated"); }
+    catch(e){ toast("Password updated"); boot(); } // the link is spent now; boot() retries the new session or shows sign-in
+  };
+}
 async function showLogin(){
   $("#login").classList.remove("hidden"); $("#appwrap").classList.add("hidden");
+  loginPanel("signin");
   const u=$("#loginUser"), p=$("#loginPass");
   if(u) u.value=""; if(p) p.value="";
   $("#pwLogin").onclick=doLogin;
   $("#ssoLogin").onclick=doSso;
-  let cfg=null; try{ cfg=await (await fetch("/api/config")).json(); }catch(e){}
+  $("#forgotLink").onclick=showForgot; $("#forgotBack").onclick=hideForgot; $("#forgotBtn").onclick=doForgot;
+  const fi=$("#forgotId"); if(fi){ fi.value=""; fi.onkeydown=(e)=>{ if(e.key==="Enter"){ e.preventDefault(); doForgot(); } }; }
+  const cfg=await getConfig();
+  // With AD sign-in on, most people's password is their Windows one, which only IT can reset.
+  const ad=$("#forgotAd"); if(ad) ad.classList.toggle("hidden",!(cfg.passwordReset&&cfg.passwordReset.directory));
   // Microsoft 365 button only when Entra SSO is enabled (legacy on-prem option).
   const ssoOn=!!(cfg&&cfg.sso&&cfg.sso.enabled); const b=$("#ssoLogin"); if(b&&b.parentElement) b.parentElement.style.display=ssoOn?"":"none";
   const clerkOn=!!(cfg&&cfg.clerk&&cfg.clerk.enabled&&cfg.clerk.publishableKey);
@@ -224,8 +320,7 @@ async function doLogin(){
   catch(e){ toast(e.message||"Login failed"); }
 }
 async function doSso(){
-  let cfg=null; try{ cfg=await (await fetch("/api/config")).json(); }catch(e){}
-  const sso=(cfg&&cfg.sso)||{};
+  const sso=(await getConfig()).sso||{};
   if(sso.enabled && sso.clientId && sso.tenantId){ // real Microsoft Entra ID via MSAL.js
     try{
       await ensureMsal();
@@ -1497,10 +1592,18 @@ async function team(){
   const canManage=["Quality Manager","Administrator"].includes(ME.role);
   let users=[]; try{ users=await api("/api/admin/users"); }catch(e){ users=[]; }
   window._users=users; window._usersArchived=null;
+  // The list is paged, so surface pending reset requests up top rather than only as a row pill — split
+  // by whether THIS viewer has a Reset link for them (an Administrator's needs another Administrator).
+  const asked=canManage?users.filter(u=>u.resetRequested&&!u.archived):[];
+  const mine=asked.filter(canResetUser), notMine=asked.filter(u=>!canResetUser(u));
+  const who=l=>l.map(u=>`<b>${esc(u.name||u.id)}</b> (${esc(u.id)})`).join(', ');
+  const mailOn=!!((await getConfig()).passwordReset||{}).email; // then people with an e-mail address were most likely sent a link already
   app().innerHTML=`<div class="card"><h2>Team &amp; Access</h2><p class="sub">People who can sign in, their roles, and which stages they're qualified to sign off.</p>
+    ${mine.length?`<div class="banner warn no-print">Password reset requested by ${who(mine)}. Use <b>Reset link</b> on their row to give them a link${mailOn?' (anyone with an e-mail address on file was probably e-mailed one already — check with them first)':''}.</div>`:''}
+    ${notMine.length?`<div class="banner warn no-print">Password reset requested by ${who(notMine)}. Only an Administrator can issue a reset link for an Administrator account — ask another Administrator (if none can sign in, use the break-glass script in Knowledge Base A4).</div>`:''}
     <h3>Users ${canManage?`<button class="btn gold sm no-print" style="margin-left:8px" onclick="userModal()">+ Add user</button>`:''}</h3>
     <div id="lv_team"></div>
-    ${canManage?'<p class="sub" style="margin-top:10px">Roles: QA Officer · Supervisor · Quality Manager · Administrator. Supervisors and above can edit jobs &amp; settings; Quality Manager/Administrator manage users.</p>':'<p class="sub" style="margin-top:8px">Only a Quality Manager or Administrator can add or edit users.</p>'}</div>`;
+    ${canManage?'<p class="sub" style="margin-top:10px">Roles: QA Officer · Supervisor · Quality Manager · Administrator. Supervisors and above can edit jobs &amp; settings; Quality Manager/Administrator manage users. Forgotten password? <b>Reset link</b> gives the person a one-time link to set a new one.</p>':'<p class="sub" style="margin-top:8px">Only a Quality Manager or Administrator can add or edit users.</p>'}</div>`;
   listView({ key:'team', rows:users,
     columns:[ {label:'Username',sortVal:u=>u.id}, {label:'Name',sortVal:u=>u.name||''}, {label:'Role',sortVal:u=>u.role||''},
       {label:'Qualified stages'}, {label:'',thClass:'no-print'} ],
@@ -1523,14 +1626,43 @@ async function teamStatusFilter(v){
     lvData('team', window._users||[]);
   }
 }
+/* Local passwords only (AD/Microsoft accounts reset in the directory); only an Administrator may
+   reset an Administrator — the server enforces both, this just hides a button that would 4xx. */
+function canResetUser(u){ return !!ME && ["Quality Manager","Administrator"].includes(ME.role) && !u.archived && u.source!=='ad' && (u.role!=='Administrator' || ME.role==='Administrator'); }
 function userRow(u){
   const canManage=ME&&["Quality Manager","Administrator"].includes(ME.role);
+  const canReset=canResetUser(u);
   const actions=u.archived
     ?`<span class="pill grey">Archived</span>${canManage?` <button class="btn gold sm" onclick="restoreUser('${jsq(u.id)}')">Restore</button>`:''}`
-    :(canManage?`<button class="btn ghost sm" onclick="userModal('${jsq(u.id)}')">Edit</button> <button class="btn danger sm" onclick="delUser('${jsq(u.id)}')">Remove</button>`:'');
-  return `<tr><td><b>${esc(u.id)}</b></td><td>${esc(u.name)}</td><td>${esc(u.role)}</td><td>${(u.qualifiedStages&&u.qualifiedStages.length)?esc(u.qualifiedStages.slice().sort().join(', ')):'—'}</td><td class="no-print">${actions}</td></tr>`;
+    :(canManage?`<button class="btn ghost sm" onclick="userModal('${jsq(u.id)}')">Edit</button> ${canReset?`<button class="btn ghost sm" onclick="resetLinkModal('${jsq(u.id)}')">Reset link</button> `:''}<button class="btn danger sm" onclick="delUser('${jsq(u.id)}')">Remove</button>`:'');
+  const asked=(u.resetRequested&&!u.archived)?` <span class="pill amber" title="${esc('Asked for a password reset '+fmtLocal(u.resetRequested))}">Reset requested</span>`:'';
+  return `<tr><td><b>${esc(u.id)}</b>${asked}</td><td>${esc(u.name)}</td><td>${esc(u.role)}</td><td>${(u.qualifiedStages&&u.qualifiedStages.length)?esc(u.qualifiedStages.slice().sort().join(', ')):'—'}</td><td class="no-print">${actions}</td></tr>`;
 }
 async function restoreUser(id){ try{ await api("/api/admin/users/"+encodeURIComponent(id)+"/restore",{method:"POST"}); toast("User restored"); team(); }catch(e){ toast(e.message); } }
+function fmtLocal(iso){ const d=new Date(iso); return isNaN(d)?String(iso||''):d.toLocaleString(); }
+/* Admin-issued reset link: the server signs a one-time token (dies as soon as the password changes);
+   we build the link from this page's own origin so it always points at the deployment in use. */
+async function resetLinkModal(id){ const u=(window._users||[]).find(x=>x.id===id); if(!u) return;
+  let r; try{ r=await api("/api/admin/users/"+encodeURIComponent(id)+"/reset-link",{method:"POST",body:{email:false}}); }catch(e){ toast(e.message); return; }
+  const link=location.origin+"/#reset="+encodeURIComponent(r.token), who=u.name||u.id;
+  const canMail=!!(u.email && ((await getConfig()).passwordReset||{}).email);
+  $("#modalRoot").innerHTML=`<div class="modal-bg"><div class="modal"><h2>Password reset link</h2>
+    <p class="sub">Give this link to <b>${esc(who)}</b> (${esc(u.id)}). It works once and expires ${esc(fmtLocal(r.expiresAt))}.</p>
+    <div class="field"><label>Reset link</label><input id="rl_link" readonly value="${esc(link)}" onfocus="this.select()"></div>
+    <div class="banner warn" style="margin-top:12px">Anyone holding this link can set a new password for this account — hand it only to ${esc(who)} (in person or a direct message), never a group chat.</div>
+    <div class="row-actions"><button class="btn gold" onclick="copyResetLink()">Copy link</button>${canMail?`<button class="btn ghost" id="rl_mail" onclick="emailResetLink('${jsq(u.id)}')">E-mail it to ${esc(u.email)}</button>`:''}<button class="btn ghost" onclick="closeModal();team()">Done</button></div></div></div>`;
+}
+async function copyResetLink(){ const i=$("#rl_link"); if(!i) return; const v=i.value;
+  try{ if(navigator.clipboard && window.isSecureContext){ await navigator.clipboard.writeText(v); toast("Link copied"); return; } }catch(e){} // falls through on http:// on-prem or a denied permission
+  let ok=false; try{ i.focus(); i.select(); i.setSelectionRange(0,v.length); ok=document.execCommand("copy"); }catch(e){}
+  toast(ok?"Link copied":"Select the link and copy it manually");
+}
+async function emailResetLink(id){ const u=(window._users||[]).find(x=>x.id===id); const b=$("#rl_mail"); if(b) b.disabled=true;
+  try{ const r=await api("/api/admin/users/"+encodeURIComponent(id)+"/reset-link",{method:"POST",body:{email:true}});
+    if(r.emailed){ toast("Reset link e-mailed to "+((u&&u.email)||id)); if(b) b.textContent="E-mailed ✓"; }
+    else { toast("The link was not e-mailed — copy it instead"); if(b) b.disabled=false; }
+  }catch(e){ toast(e.message); if(b) b.disabled=false; }
+}
 /* audit trail */
 async function auditTrail(){
   app().innerHTML=`<div class="card"><div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">

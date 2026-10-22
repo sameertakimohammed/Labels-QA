@@ -144,6 +144,8 @@ In Portainer: **Stacks → Add stack → Repository**.
    | `SMTP_FROM` | optional | From address, e.g. `golden-qa@golden.com.fj`. |
    | `NOTIFY_EMAIL_TO` | optional | Comma-separated always-notify recipients (managers/supervisors), in addition to users who have an e-mail on their account. |
    | `TEAMS_WEBHOOK_URL` | optional | Microsoft Teams incoming-webhook URL — mirrors the same alerts. |
+   | `APP_URL` | optional | Public base URL put in e-mailed password-reset links. Blank = `https://$APP_HOST`. Never taken from the request `Host` header. E-mailed links also need `SMTP_HOST`. |
+   | `PASSWORD_RESET_MINUTES` / `PASSWORD_RESET_ADMIN_HOURS` | optional | Reset-link lifetimes: e-mailed *Forgot password?* links (default 30 min) and links issued from Team & Access (default 24 h). |
 
    Non-secret runtime values are fixed in the compose file (`NODE_ENV=production`,
    `PORT=3000`, `HOST=0.0.0.0`, `BACKUP_DIR=/backups`); the app's other non-secret

@@ -18,15 +18,63 @@ reference see [SYSTEM-GUIDE.md](SYSTEM-GUIDE.md); for structured training see
 - **Microsoft 365 / Entra:** tap **Sign in with Microsoft 365**. If real Entra SSO isn't configured
   yet, this asks for your `@golden.com.fj` e-mail (demo mode) — unknown e-mails get **QA Officer**
   access. For full role access before SSO is set up, sign in with your username/password instead.
+- **Forgot your password?** Tap **Forgot password?** under **Sign in** — see **A4**.
 
 ### A3. Change your password
 **My Account → Change password.** Enter current + new (min 6 characters) twice. (Microsoft 365
 accounts manage their password in Microsoft, not here.)
 
 ### A4. Forgot your password
-Ask an Administrator to set a new one in **Admin → Users**. If **no** admin can sign in (e.g. the
-only admin forgot theirs), someone with access to the Docker host runs the break-glass reset inside
-the app container — it prompts for the new password and works while the app is running:
+You can reset it yourself — nobody needs to know or type your new password.
+
+1. On the sign-in screen tap **Forgot password?** (under **Sign in**).
+2. Enter your **username** (or the e-mail address on your account) → **Request reset**.
+3. What happens next:
+   - Either way, a **Reset requested** tag appears next to your username in **Team & Access**.
+   - **The server can send e-mail and your account has an e-mail address** → you get an e-mail
+     *"Golden QA: reset your password"* with a link, valid for **30 minutes** — nothing else to do.
+     Didn't ask for it? Ignore it — your password is unchanged.
+   - **Otherwise** (most floor accounts have no e-mail) → **ask your Quality Manager or
+     Administrator for a reset link**. Managers are only *pushed* an alert if Teams / alert e-mail
+     is configured; otherwise they see the tag when they open Team & Access, so tell them.
+4. Open the link → **Set a new password for *you*** → type the new password twice (min 6
+   characters) → **Save new password**. You're signed straight in.
+
+Good to know:
+- The screen shows the **same message whether or not the username exists** — on purpose, so it
+  can't be used to find out who has an account. Repeat requests for the same account within 5
+  minutes are ignored; more than 5 requests in 15 minutes from the same network get *"Too many
+  requests. Try again later."* — wait and retry, or ask a manager for a link.
+- A link works **once**. It dies as soon as the password changes (by this link, **My Account →
+  Change password**, or an admin) or the account's role changes, and expires on its own if unused.
+- After a reset your **old password stops working** and **every other device signed in as you is
+  signed out**.
+- Remembered your password after asking? Just sign in — that withdraws the request (the **Reset
+  requested** tag goes away).
+- Opening a reset link always shows the reset screen — even on a shared tablet where someone else
+  is still signed in. **Cancel** goes back without changing anything.
+- The browser's **history keeps the link** until it is used or expires. On a shared tablet, finish
+  the reset once you have opened a link (or ask a manager to cancel it — see below).
+- **Active Directory / Microsoft 365 accounts** can't be reset here — reset them in the directory
+  (with IT).
+
+**Managers: give someone a reset link** *(Quality Manager / Administrator)* — **Team & Access →
+Reset link** on that person's row. Copy the link (**Copy link**) and hand it to them **directly**
+(in person, or a private message — never a group chat: whoever holds the link can set the
+password). It works once and expires after **24 hours**. If the person has an e-mail address and
+the server can send e-mail, **E-mail it to …** sends it for you. Only an Administrator can issue a
+link for an Administrator account. Every request, link and reset is recorded in the audit trail.
+With e-mail set up, a **Reset requested** person who has an e-mail address was probably e-mailed a
+link already — check with them before issuing another.
+**Issuing a new link does not cancel earlier ones.** To cancel a link shared by mistake, set a
+temporary password in **Edit** (and give it to the person, or issue them a fresh link afterwards):
+any password change kills every outstanding link for that account.
+(Link lifetimes are set by `PASSWORD_RESET_MINUTES` / `PASSWORD_RESET_ADMIN_HOURS`; e-mailed links
+need SMTP plus the app's public address — see [SYSTEM-GUIDE §7](SYSTEM-GUIDE.md#7-configuration-configjson).)
+
+**Last resort — no admin can sign in at all** (e.g. the only admin forgot theirs and has no e-mail):
+someone with access to the Docker host runs the break-glass reset inside the app container — it
+prompts for the new password and works while the app is running:
 
 ```sh
 docker exec -it -u node <app-container> node scripts/reset-password.js --list      # show usernames
@@ -162,6 +210,11 @@ the events to receive. Delivery status shows in the list.
 **Settings → Restore from backup** (Administrator, JSON storage). Pick a snapshot → confirm. A
 safety backup of current data is taken first. **This replaces all live data.**
 
+### E8. Give someone a password reset link
+**Team & Access → Reset link** on their row (Quality Manager / Administrator) → **Copy link** and
+hand it to them directly. Rows showing **Reset requested** are people who tapped *Forgot password?*.
+Full steps in **A4**.
+
 ---
 
 ## F. Offline use
@@ -178,7 +231,11 @@ safety backup of current data is taken first. **This replaces all live data.**
 
 | Symptom | Cause & fix |
 |---|---|
-| **"Too many failed attempts… try again in N min"** (429) | Login lockout after repeated wrong passwords. Wait out the cool-off, or an admin can restart the app (the throttle is in-memory). Forgot it entirely? See **A4**. |
+| **"Too many failed attempts… try again in N min"** (429) | Login lockout after repeated wrong passwords. Wait out the cool-off, or an admin can restart the app (the throttle is in-memory). Forgot it entirely? See **A4** — resetting the password also lifts the lockout. |
+| **"This reset link is invalid or has expired. Ask for a new one."** | The link was already used, has expired (30 min for an e-mailed link, 24 h for one from a manager), the password or the account's role was changed after it was issued, the account was archived, or the link got cut off when copied. Tap **Forgot password?** again or ask a manager for a fresh **Reset link** (**A4**). |
+| **Asked for a reset but no e-mail arrived** | Your account has no e-mail address, the server has no SMTP/public address configured, or it went to spam. Without e-mail the request shows as **Reset requested** in Team & Access — ask a Quality Manager/Administrator for a reset link (**A4**). |
+| **"Couldn't reach the server to check this link"** | The tablet is offline or the server didn't answer. The link isn't used up: reconnect and tap **Try again**, or open the link again later. |
+| **No "Reset link" button on a user** | Only a Quality Manager/Administrator sees it; it's hidden on archived and Active Directory accounts, and on Administrator accounts unless you are an Administrator. |
 | **"Not qualified to sign off Stage N"** (403) | Competency enforcement is on and you aren't qualified for that stage. An admin adds the stage in **Team & Access**, or an Administrator signs off. |
 | **Charts are blank / "Charts need internet"** | Chart.js loads from a CDN on first use. Open the app online once; it's then cached for offline. |
 | **Camera/scan doesn't work** | The camera needs **HTTPS**. Use the `https://` site (Traefik/Caddy), not plain `http://<ip>`. |

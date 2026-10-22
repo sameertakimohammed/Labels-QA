@@ -42,7 +42,7 @@ Linux: `systemd` or `pm2`). See section 7.
 | `akumar` | A. Kumar | QA Officer | `kumar123` |
 | `pdevi` | P. Devi | QA Officer | `devi123` |
 
-Passwords are salted and hashed with **scrypt**. Change them in **Admin → Users**. For production, wire the app to your **local Active Directory** so staff sign in with their domain accounts (see [deploy/AD-SSO-SETUP.md](deploy/AD-SSO-SETUP.md)); the seeded admin above stays as a local break-glass account. Locked out of every admin account? Run `node scripts/reset-password.js <username>` inside the app container (or locally against Supabase for the Vercel deploy) (see [Knowledge Base A4](docs/KNOWLEDGE-BASE.md)).
+Passwords are salted and hashed with **scrypt**. Change them in **Admin → Users**. Forgotten password? Tap **Forgot password?** on the sign-in screen — it e-mails a one-time link automatically when SMTP and the public URL are configured and the account has an e-mail address, and otherwise flags the request in **Team & Access**. There a Quality Manager/Administrator issues a one-time **Reset link** to copy and hand over, or sends it with **E-mail it to …** under the same conditions (see [Knowledge Base A4](docs/KNOWLEDGE-BASE.md#a4-forgot-your-password)). For production, wire the app to your **local Active Directory** so staff sign in with their domain accounts (see [deploy/AD-SSO-SETUP.md](deploy/AD-SSO-SETUP.md)); the seeded admin above stays as a local break-glass account. Locked out of every admin account? Run `node scripts/reset-password.js <username>` inside the app container (or locally against Supabase for the Vercel deploy) (see [Knowledge Base A4](docs/KNOWLEDGE-BASE.md)).
 
 ---
 
@@ -158,7 +158,9 @@ scorecards** · **executive dashboard** (KPI targets + Red/Amber/Green) · **sta
 with extractable calibration history (CSV/Excel) · **Amendments History** — tamper-evident
 (HMAC-chained), field-level who/when/before→after, filterable + exportable, per-record drill-down ·
 admin master-data editor ·
-**user management** (add/edit, password reset) · **training/competency gating** · **login
+**user management** (add/edit, password reset) · **self-service password reset** ("Forgot
+password?" → e-mailed one-time link, or the request is flagged for managers, who issue a copyable
+reset link from Team & Access — works with no e-mail configured) · **training/competency gating** · **login
 brute-force lockout** · **stage-in-sequence enforcement** · **required-field validation** ·
 **dashboard search/filter** · **CSV + Excel export** · **manager e-mail/Teams digest** +
 **scheduled reports** · read-only **REST API keys** · outbound **webhooks** · Prometheus

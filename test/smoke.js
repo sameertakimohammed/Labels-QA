@@ -806,6 +806,146 @@ async function main() {
     r = await request('GET', '/api/audit/verify', undefined, adminToken);
     ok('audit chain still intact after v2 (field-level) entries', !!(r.body && r.body.ok === true), JSON.stringify(r.body));
 
+    // 34. PASSWORD RESET — self-service "Forgot password?" + admin-issued reset links.
+    // Kept LAST and run against pdevi (a seeded QA Officer no earlier section signs in as); her seeded
+    // password is put back at the end, so no other test can depend on the state this section changes.
+    // No SMTP in this run, so a forgot request takes the "admin notified" path.
+    const RUSER = 'pdevi', RNEWPW = 'devi-reset-' + PID;
+    r = await request('GET', '/api/config');
+    ok('reset: /api/config reports passwordReset {email:false (no SMTP), minutes = link lifetime}',
+      !!(r.body && r.body.passwordReset && r.body.passwordReset.email === false && r.body.passwordReset.minutes === (Number(process.env.PASSWORD_RESET_MINUTES) || 30)), JSON.stringify(r.body && r.body.passwordReset));
+    r = await request('POST', '/api/login', { username: RUSER, password: 'devi123' });
+    eq('reset: pdevi signs in with the seeded password', r.status, 200);
+    const rOldSession = r.body && r.body.token;
+    // no user enumeration: an unknown id and a real one get byte-identical 200s (input is trimmed + lower-cased)
+    const fGhost = await request('POST', '/api/password/forgot', { identifier: '  Ghost<b>' + PID + ' ' });
+    const fReal = await request('POST', '/api/password/forgot', { identifier: ' PDEVI ' });
+    eq('reset: forgot for an unknown account -> 200', fGhost.status, 200);
+    eq('reset: forgot for a real account -> 200', fReal.status, 200);
+    ok('reset: forgot bodies identical for unknown vs real account (no enumeration)',
+      fGhost.raw === fReal.raw && !!(fReal.body && fReal.body.ok === true), fGhost.raw + ' vs ' + fReal.raw);
+    r = await request('GET', '/api/admin/users', undefined, adminToken);
+    const reqRow = (r.body || []).find((u) => u.id === RUSER);
+    const reqAt = reqRow && reqRow.resetRequested;
+    ok('reset: Team & Access shows resetRequested for the requester', !!reqAt, JSON.stringify(reqRow));
+    ok('reset: users who did not ask carry resetRequested ""',
+      Array.isArray(r.body) && r.body.filter((u) => u.id !== RUSER).every((u) => u.resetRequested === ''),
+      JSON.stringify((r.body || []).map((u) => u.id + ':' + u.resetRequested)));
+    r = await request('POST', '/api/password/forgot', { identifier: RUSER });
+    ok('reset: repeat request inside the 5-min cooldown -> same generic 200', r.status === 200 && r.raw === fReal.raw, r.status + ' ' + r.raw);
+    r = await request('GET', '/api/admin/users', undefined, adminToken);
+    eq('reset: cooldown leaves resetRequested unchanged', ((r.body || []).find((u) => u.id === RUSER) || {}).resetRequested, reqAt);
+
+    // who may issue a reset link
+    r = await request('POST', '/api/admin/users/' + RUSER + '/reset-link', { email: false }, officerToken);
+    eq('reset: QA Officer cannot issue a reset link -> 403', r.status, 403);
+    // a request is withdrawn when the person signs in with their password after all (also covers the
+    // break-glass script, which doesn't touch the flag): Team & Access must not keep asking for a link
+    r = await request('POST', '/api/password/forgot', { identifier: 'ateet' });
+    eq('reset: forgot for ateet -> 200', r.status, 200);
+    r = await request('GET', '/api/admin/users', undefined, adminToken);
+    ok('reset: ateet now shows resetRequested', !!((r.body || []).find((u) => u.id === 'ateet') || {}).resetRequested, JSON.stringify(r.body));
+    const qmTok = ((await request('POST', '/api/login', { username: 'ateet', password: 'ateet123' })).body || {}).token;
+    ok('reset: ateet (Quality Manager) signs in', !!qmTok, 'no token');
+    r = await request('GET', '/api/admin/users', undefined, adminToken);
+    eq('reset: signing in with the password clears resetRequested', ((r.body || []).find((u) => u.id === 'ateet') || {}).resetRequested, '');
+    r = await request('POST', '/api/admin/users/admin/reset-link', { email: false }, qmTok);
+    eq('reset: Quality Manager cannot issue a link for an Administrator -> 403', r.status, 403);
+    r = await request('POST', '/api/admin/users/nobody' + PID + '/reset-link', { email: false }, adminToken);
+    eq('reset: link for an unknown user -> 404', r.status, 404);
+    r = await request('POST', '/api/admin/users/' + encodeURIComponent('arcu' + PID) + '/reset-link', { email: false }, adminToken);
+    eq('reset: link for an archived user -> 409', r.status, 409); // arcu<PID> was left archived by section 12b
+    r = await request('POST', '/api/admin/users/' + RUSER + '/reset-link', { email: true }, adminToken);
+    ok('reset: e-mailing a link with no e-mail on file / no SMTP -> 400 with a reason',
+      r.status === 400 && !!(r.body && r.body.error) && !(r.body && r.body.token), r.status + ' ' + JSON.stringify(r.body));
+    r = await request('POST', '/api/admin/users/' + RUSER + '/reset-link', { email: false }, qmTok);
+    eq('reset: Quality Manager can issue a link for a QA Officer -> 200', r.status, 200);
+    const spareLink = r.body && r.body.token;
+    // the Administrator ceiling is re-checked when a link is used: promoting the target voids a QM's link
+    r = await request('POST', '/api/admin/users/' + RUSER + '/reset-link', { email: false }, qmTok);
+    const qmLink = (r.body && r.body.token) || '';
+    r = await request('PUT', '/api/admin/users/' + RUSER, { role: 'Administrator' }, adminToken);
+    eq('reset: admin promotes pdevi to Administrator -> 200', r.status, 200);
+    r = await request('POST', '/api/password/reset/check', { token: qmLink });
+    eq('reset: QM-issued link after the target became Administrator (check) -> 400', r.status, 400);
+    r = await request('POST', '/api/password/reset', { token: qmLink, password: RNEWPW });
+    eq('reset: QM-issued link after the target became Administrator (reset) -> 400', r.status, 400);
+    r = await request('PUT', '/api/admin/users/' + RUSER, { role: 'QA Officer' }, adminToken);
+    eq('reset: pdevi back to QA Officer -> 200', r.status, 200);
+    r = await request('POST', '/api/admin/users/' + RUSER + '/reset-link', { email: false }, adminToken);
+    eq('reset: admin issues a reset link for a QA Officer -> 200', r.status, 200);
+    const rTok = (r.body && r.body.token) || '';
+    ok('reset: link response has token + future expiresAt (ISO) + emailed:false',
+      !!(rTok && r.body.expiresAt && Date.parse(r.body.expiresAt) > Date.now() && r.body.emailed === false),
+      JSON.stringify(r.body && { tok: !!r.body.token, exp: r.body.expiresAt, emailed: r.body.emailed }));
+
+    // the link identifies the user; session and reset tokens never stand in for each other
+    r = await request('POST', '/api/password/reset/check', { token: rTok });
+    ok('reset: reset/check returns the link\'s user',
+      r.status === 200 && !!(r.body && r.body.ok === true && r.body.user && r.body.user.id === RUSER && r.body.user.name === 'P. Devi'),
+      r.status + ' ' + JSON.stringify(r.body));
+    r = await request('POST', '/api/password/reset/check', { token: rOldSession });
+    eq('reset: a session token used as a reset token (check) -> 400', r.status, 400);
+    r = await request('POST', '/api/password/reset', { token: rOldSession, password: RNEWPW });
+    eq('reset: a session token used as a reset token (reset) -> 400', r.status, 400);
+    r = await request('GET', '/api/me', undefined, rTok);
+    eq('reset: a reset token used as x-token on /api/me -> 401', r.status, 401);
+    const rDot = rTok.lastIndexOf('.'), rBody = rTok.slice(0, rDot), rSig = rTok.slice(rDot + 1);
+    r = await request('POST', '/api/password/reset/check', { token: rBody + '.' + (rSig[0] === 'A' ? 'B' : 'A') + rSig.slice(1) });
+    eq('reset: tampered signature -> 400', r.status, 400);
+    let forged = {}; try { forged = JSON.parse(Buffer.from(rBody, 'base64url').toString('utf8')); } catch (e) { /* asserted below */ }
+    forged.uid = 'admin';
+    r = await request('POST', '/api/password/reset', { token: Buffer.from(JSON.stringify(forged)).toString('base64url') + '.' + rSig, password: RNEWPW });
+    eq('reset: tampered payload (uid re-pointed at admin) -> 400', r.status, 400);
+    r = await request('POST', '/api/password/reset', { token: 'garbage', password: RNEWPW });
+    eq('reset: malformed token -> 400', r.status, 400);
+    r = await request('POST', '/api/password/reset', { token: rTok, password: 'abc' });
+    ok('reset: new password shorter than 6 -> 400', r.status === 400 && /at least 6/.test((r.body || {}).error || ''), r.status + ' ' + JSON.stringify(r.body));
+
+    // the reset itself: signs the user in, kills old sessions + old password, link is single-use
+    r = await request('POST', '/api/password/reset', { token: rTok, password: RNEWPW });
+    eq('reset: reset with a valid link -> 200', r.status, 200);
+    const rNewSession = r.body && r.body.token;
+    ok('reset: response carries a session token + the user', !!(rNewSession && r.body.user && r.body.user.id === RUSER), JSON.stringify(r.body && r.body.user));
+    r = await request('GET', '/api/me', undefined, rNewSession);
+    ok('reset: returned session token works on /api/me', r.status === 200 && !!(r.body && r.body.user && r.body.user.id === RUSER), r.status + ' ' + JSON.stringify(r.body));
+    r = await request('GET', '/api/me', undefined, rOldSession);
+    eq('reset: sessions from before the reset are signed out -> 401', r.status, 401);
+    // checked before any sign-in below, which would clear the flag on its own
+    r = await request('GET', '/api/admin/users', undefined, adminToken);
+    eq('reset: resetRequested cleared after the reset', ((r.body || []).find((u) => u.id === RUSER) || {}).resetRequested, '');
+    r = await request('POST', '/api/login', { username: RUSER, password: 'devi123' });
+    eq('reset: old password login -> 401', r.status, 401);
+    r = await request('POST', '/api/login', { username: RUSER, password: RNEWPW });
+    eq('reset: new password login -> 200', r.status, 200);
+    r = await request('POST', '/api/password/reset', { token: rTok, password: 'another-' + PID });
+    eq('reset: reusing the same reset token -> 400', r.status, 400);
+    r = await request('POST', '/api/password/reset/check', { token: rTok });
+    eq('reset: reset/check on the used token -> 400', r.status, 400);
+    r = await request('POST', '/api/password/reset/check', { token: spareLink });
+    eq('reset: every other outstanding link for the account dies too -> 400', r.status, 400);
+
+    // audit trail: who asked, who issued, who reset — and a probe for an unknown id, sanitised
+    r = await request('GET', '/api/audit?action=reset&limit=5000', undefined, adminToken);
+    const rAud = Array.isArray(r.body) ? r.body : [];
+    const rAudStr = JSON.stringify(rAud.map((e) => e.user + ':' + e.action + ':' + e.detail));
+    ok('reset: audit logs the request as "(admin notified)"', rAud.some((e) => e.action === 'password-reset-request' && e.detail === RUSER + ' (admin notified)'), rAudStr);
+    // a repeat inside the cooldown does the same work (audit + save) as every other outcome, so its
+    // response time can't single out a real account
+    ok('reset: audit logs the repeat request inside the cooldown', rAud.some((e) => e.action === 'password-reset-request' && e.detail === RUSER + ' (repeat request within cooldown)'), rAudStr);
+    ok('reset: audit logs the unknown-id probe with the identifier sanitised',
+      rAud.some((e) => e.action === 'password-reset-request' && String(e.detail).indexOf('ghostb' + PID) >= 0 && String(e.detail).indexOf('<') < 0), rAudStr);
+    ok('reset: audit logs who issued the link', rAud.some((e) => e.action === 'issue-reset-link' && e.user === 'admin' && e.detail === RUSER), rAudStr);
+    ok('reset: audit logs the reset against the user', rAud.some((e) => e.action === 'password-reset' && e.user === RUSER), rAudStr);
+    r = await request('GET', '/api/audit/verify', undefined, adminToken);
+    ok('reset: audit chain still intact after reset entries', !!(r.body && r.body.ok === true), JSON.stringify(r.body));
+
+    // put pdevi's seeded password back so anything appended after this section sees the dev seed
+    r = await request('PUT', '/api/admin/users/' + RUSER, { password: 'devi123' }, adminToken);
+    eq('reset: restore pdevi\'s seeded password -> 200', r.status, 200);
+    r = await request('POST', '/api/login', { username: RUSER, password: 'devi123' });
+    eq('reset: pdevi signs in with the seeded password again', r.status, 200);
+
   } catch (e) {
     failed++;
     console.log('FAIL  unexpected error during run -> ' + (e && e.stack ? e.stack : e));

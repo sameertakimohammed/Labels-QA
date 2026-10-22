@@ -5,9 +5,10 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "test": "node test/smoke.js && node test/ad-smoke.js",
+    "test": "node test/smoke.js && node test/ad-smoke.js && node test/reset-email-smoke.js",
     "test:api": "node test/smoke.js",
-    "test:ad": "node test/ad-smoke.js"
+    "test:ad": "node test/ad-smoke.js",
+    "test:reset-email": "node test/reset-email-smoke.js"
   },
   "engines": {
     "node": ">=18"
