@@ -97,6 +97,15 @@ async function main() {
     let r = await request('GET', '/api/health');
     eq('health returns 200', r.status, 200);
     ok('health ok:true and org present', !!(r.body && r.body.ok && r.body.org), JSON.stringify(r.body));
+    // Vercel rewrites hand the function /api/index with the original path in ?__p= (vercel.json)
+    r = await request('GET', '/api/index?__p=%2Fapi%2Fhealth');
+    ok('rewritten /api/index?__p=/api/health is served as /api/health', r.status === 200 && !!(r.body && r.body.ok), r.status + ' ' + JSON.stringify(r.body));
+    r = await request('GET', '/api/index?mode=x&__p=%2Fapi%2Fconfig');
+    ok('__p keeps the rest of the query and routes to /api/config', r.status === 200 && !!(r.body && r.body.orgName), r.status + ' ' + JSON.stringify(r.body));
+    r = await request('GET', '/api/index?__p=%2Fsome%2Fapp%20page');
+    ok('__p app path falls back to the SPA index.html', r.status === 200 && /<html/i.test(r.raw || ''), r.status + ' ' + String(r.raw || '').slice(0, 60));
+    r = await request('GET', '/api/index?__p=%2F%2Fevil.example%2Fx');
+    ok('__p ignores protocol-relative values', r.status === 401, String(r.status));
 
     // 2. login admin / admin123
     r = await request('POST', '/api/login', { username: 'admin', password: 'admin123' });

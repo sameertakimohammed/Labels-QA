@@ -2002,6 +2002,14 @@ function digestHtml(d){
 let _longRunning = false; // set by the require.main block below (local / on-prem server)
 async function handleRequest(req, res) {
   let url; try { url = new URL(req.url, 'http://x'); } catch (e) { res.writeHead(400); return res.end('bad request'); }
+  // Vercel hands a function the rewrite DESTINATION as req.url, not the path the browser asked for. /api/*
+  // avoids rewrites (api/[...path].js gets the raw URL, so ids like "5502%2FWA" survive); /metrics, /uploads/*
+  // and app paths are rewritten to /api/index with the original path in ?__p= (vercel.json). Vercel decodes
+  // it, so each segment is re-encoded; none of those paths carries an id that contains "/".
+  if (url.pathname === '/api/index' && url.searchParams.has('__p')) {
+    const p = url.searchParams.get('__p'); url.searchParams.delete('__p');
+    if (/^\/(?!\/)/.test(p)) { try { url = new URL(p.split('/').map(encodeURIComponent).join('/') + url.search, 'http://x'); } catch (e) {} }
+  }
   const method = req.method || 'GET';
   // /api/config and /api/health must NOT depend on the database — they are exactly what you hit
   // to diagnose a bad DATABASE_URL, and /api/config also drives the sign-in screen (so the Clerk
