@@ -209,7 +209,8 @@ Photos and signatures are stored as files under `data/uploads/`.
 recommended on Vercel) or `SMTP_HOST` / `SMTP_PORT` / `SMTP_SECURE` / `SMTP_USER` / `SMTP_PASS` (relay)
 turns it on; if both are set, Resend wins, and `SMTP_ENABLED=false` forces e-mail off. `EMAIL_FROM` is
 the sender (required with Resend and must be on its verified domain, e.g. `Golden QA <qa@gml.com.fj>`;
-`SMTP_FROM` is the older name, `EMAIL_FROM` wins), `NOTIFY_EMAIL_TO` the always-notify recipients.
+`SMTP_FROM` is the older name, `EMAIL_FROM` wins), `NOTIFY_EMAIL_TO` the QA-manager recipients of operational
+alerts and the digest (admin-side alerts such as *Password reset requested* go to Administrators instead).
 
 **Password reset:** `PASSWORD_RESET_MINUTES` (lifetime of a self-service, e-mailed link; default
 `30`), `PASSWORD_RESET_ADMIN_HOURS` (lifetime of a link issued from Team & Access; default `24`),
@@ -247,9 +248,11 @@ by IT).
   every answer is held to at least 3 s — only a mail server slower than that still shows in the
   timing. It is throttled per IP (5 / 15 min → 429) and per account (one e-mail/alert per 5 min). A
   request records `resetRequestedAt` (shown as **Reset requested** in Team & Access until the password
-  changes or the user signs in); when no link could be e-mailed it also alerts managers: by e-mail
-  when e-mail is on (to `NOTIFY_EMAIL_TO`, or `config.json` `notify.email.to` if that is unset, so
-  someone is always e-mailed) and via Teams if configured (Teams is best-effort on serverless). Only
+  changes or the user signs in); when no link could be e-mailed it also sends an admin-side alert: by e-mail
+  when e-mail is on, to the active Administrator accounts that have an e-mail address (if none has one,
+  to `NOTIFY_EMAIL_TO` / `config.json` `notify.email.to` instead, plus Teams if configured — Teams is
+  best-effort on serverless). Operational alerts (hold/reject/CAPA, digest) never go to Administrators
+  unless they are listed in `NOTIFY_EMAIL_TO`; checklist e-mails go to Supervisors/Quality Managers. Only
   with e-mail off and no Teams webhook is nobody pushed an alert. Requests,
   issued links and resets are all audited (`password-reset-request`, `issue-reset-link`,
   `password-reset`).

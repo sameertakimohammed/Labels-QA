@@ -114,6 +114,17 @@ stub.listen(STUB_PORT, '127.0.0.1', async () => {
     ok('Resend error -> 502 with Resend\'s message', r.status === 502 && /Resend 422/.test(r.body.error || '') && /not verified/.test(r.body.error || ''), r.status + ' ' + r.raw);
     ok('error response does not contain the API key', !r.raw.includes(API_KEY));
 
+    // admin-side alert: a reset request from an account with no e-mail goes to the Administrators only,
+    // not to the operational list (NOTIFY_EMAIL_TO / config.json notify.email.to)
+    r = await rq('POST', '/api/admin/users', { id: 'nomail', name: 'No Mail', role: 'QA Officer', password: 'secret1' }, adminTok);
+    ok('created a QA Officer with no e-mail', r.status === 200, r.status + ' ' + r.raw);
+    calls.length = 0;
+    r = await rq('POST', '/api/password/forgot', { identifier: 'nomail' });
+    await sleep(800); // alert e-mails are fire-and-forget on the long-running server
+    const resetAlert = calls.find(x => /Password reset requested/.test((x.body && x.body.subject) || ''));
+    ok('reset-request alert e-mailed', !!resetAlert, JSON.stringify(calls.map(x => x.body && x.body.subject)));
+    ok('reset-request alert goes to the Administrator e-mail only', !!resetAlert && JSON.stringify(resetAlert.body.to) === JSON.stringify([ADMIN_EMAIL]), JSON.stringify(resetAlert && resetAlert.body.to));
+
     r = await rq('GET', '/api/audit?limit=1000', null, adminTok);
     ok('audit log never contains the API key', r.status === 200 && !r.raw.includes(API_KEY), String(r.status));
     r = await rq('GET', '/api/audit/verify', null, adminTok);
@@ -134,6 +145,7 @@ stub.listen(STUB_PORT, '127.0.0.1', async () => {
     replyDelayMs = 0;
     ok('serverless: hold -> 200', r.status === 200, r.status + ' ' + r.raw);
     ok('serverless: hold alert was answered by Resend BEFORE the response went out', !!(holdCall && holdCall.replied), holdCall ? 'sent, but the response went out first' : calls.length + ' call(s), none for the hold');
+    ok('operational alert (hold) does not go to the Administrator', !!holdCall && !(holdCall.body.to || []).includes(ADMIN_EMAIL), JSON.stringify(holdCall && holdCall.body.to));
   } catch (e) { console.log('TEST ERROR:', e && e.stack ? e.stack : e); fail++; }
 
   console.log('\nResend smoke summary: ' + pass + ' passed, ' + fail + ' failed');

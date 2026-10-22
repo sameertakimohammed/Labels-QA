@@ -449,6 +449,12 @@ function sendMailBg(msg, label){
   return p;
 }
 function alertAll(title, text){ try{ NOTIFY.alert(CFG, title, text); }catch(e){} sendMailBg({ subject:title, text:text }, 'EMAIL send'); }
+/* Admin-side alerts (account / access housekeeping, e.g. "Password reset requested") go to the active
+   Administrator accounts that have an e-mail on file — not to the operational list (NOTIFY_EMAIL_TO),
+   which is for the QA managers. With no Administrator e-mail on file they fall back to alertAll so a
+   request is never silently dropped. */
+function adminRecipients(){ return [...new Set((DB.users||[]).filter(u=>u.role==='Administrator' && !u.archived && EMAIL_RE.test(String(u.email||''))).map(u=>u.email.toLowerCase()))]; }
+function alertAdmins(title, text){ const to=adminRecipients(); if(!to.length) return alertAll(title, text); sendMailBg({ to, subject:title, text:text }, 'Admin alert e-mail'); }
 /* API-key auth (read-only). Keys are stored hashed; the plaintext is shown once at creation. */
 function hashKey(k){ return crypto.createHash('sha256').update(String(k)).digest('hex'); }
 function apiKeyUser(req){ const k=req.headers['x-api-key']; if(!k) return null; const rec=(DB.apikeys||[]).find(a=>a.active!==false && a.keyHash===hashKey(k)); if(!rec) return null; rec.lastUsed=new Date().toISOString(); return { id:'apikey:'+rec.id, name:rec.name+' (API key)', role:'QA Officer', _apikey:rec.id }; }
@@ -642,8 +648,10 @@ function cleanUploadUrls(arr, max){
 function cleanChecklistResponses(arr){ return (Array.isArray(arr)?arr:[]).map(r=>({ itemKey:String((r&&r.itemKey)||''), status:String((r&&r.status)||''), correctiveAction:String((r&&r.correctiveAction)||''), photos:cleanUploadUrls(r&&r.photos, 8) })).filter(r=>r.itemKey); }
 /* Instant e-mail of a completed/verified inspection to managers + supervisors (and the configured
    digest recipients). Non-blocking; also mirrors to Teams. Requires SMTP configured in config.notify.email. */
+/* Operational mail: Supervisors and Quality Managers with an e-mail on file, plus NOTIFY_EMAIL_TO.
+   Administrators are left out — they only get admin-side alerts (see alertAdmins). */
 function checklistRecipients(){
-  const roleTo=(DB.users||[]).filter(u=>['Supervisor','Quality Manager','Administrator'].includes(u.role) && EMAIL_RE.test(String(u.email||''))).map(u=>u.email.toLowerCase());
+  const roleTo=(DB.users||[]).filter(u=>['Supervisor','Quality Manager'].includes(u.role) && !u.archived && EMAIL_RE.test(String(u.email||''))).map(u=>u.email.toLowerCase());
   const cfgTo=[].concat((CFG.notify&&CFG.notify.email&&CFG.notify.email.to)||[]).map(s=>String(s).trim().toLowerCase()).filter(Boolean);
   return [...new Set(roleTo.concat(cfgTo))];
 }
@@ -976,7 +984,7 @@ async function api(req, res, url) {
     if (emailed) audit(null,'password-reset-request','', u.id+' (e-mailed)');
     else { // no e-mail on file / SMTP off / send failed: the request shows in Team & Access and managers are alerted
       audit(null,'password-reset-request','', u.id+' (admin notified)');
-      alertAll('Password reset requested', (u.name||u.id)+' ('+u.id+') asked for a password reset. Issue a reset link from Team & Access.');
+      alertAdmins('Password reset requested', (u.name||u.id)+' ('+u.id+') asked for a password reset. Issue a reset link from Team & Access.');
     }
     saveDB(); return send(res,200,{ ok:true });
   }
