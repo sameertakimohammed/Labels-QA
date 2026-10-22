@@ -36,9 +36,10 @@ if (PROD && SECRET_KEY.replace(/[^A-Za-z0-9]/g, '').length < 16) {
 const TOKEN_SECRET = SECRET_KEY || 'dev-insecure-secret-change-me';
 const TOKEN_TTL_MS = (Number(process.env.SESSION_HOURS) || 12) * 60 * 60 * 1000;
 
-/* E-mail (SMTP) + Teams: env overrides config.json so relay creds live in the Portainer
-   stack env, never in the repo. Setting SMTP_HOST turns manager e-mail on (unauthenticated
-   relay = host only; authenticated relay = also set SMTP_USER/SMTP_PASS). */
+/* E-mail + Teams: env overrides config.json so credentials live in the Vercel / Portainer stack
+   env, never in the repo. Setting RESEND_API_KEY (Resend HTTP API — the cloud deploy) or SMTP_HOST
+   (on-prem relay; unauthenticated = host only, authenticated = also SMTP_USER/SMTP_PASS) turns
+   e-mail on. Resend wins when both are set. EMAIL_FROM is the sender (SMTP_FROM is the older name). */
 CFG.notify = CFG.notify || {};
 (function applyNotifyEnv(){
   const e = Object.assign({}, CFG.notify.email);
@@ -49,11 +50,14 @@ CFG.notify = CFG.notify || {};
   if (env.SMTP_USER != null && env.SMTP_USER !== '') e.user = env.SMTP_USER;
   if (env.SMTP_PASS != null && env.SMTP_PASS !== '') e.pass = env.SMTP_PASS;
   if (env.SMTP_FROM) e.from = env.SMTP_FROM;
+  if (env.EMAIL_FROM) e.from = env.EMAIL_FROM;
+  if (env.RESEND_API_KEY) e.resendApiKey = env.RESEND_API_KEY.trim();
+  if (env.RESEND_API_URL) e.resendApiUrl = env.RESEND_API_URL; // tests point this at a local stub
   if (env.SMTP_REJECT_UNAUTHORIZED != null && env.SMTP_REJECT_UNAUTHORIZED !== '') e.rejectUnauthorized = bool(env.SMTP_REJECT_UNAUTHORIZED);
   if (env.NOTIFY_EMAIL_TO) e.to = env.NOTIFY_EMAIL_TO.split(',').map(s => s.trim()).filter(Boolean);
-  // Enable when a host is configured (env or config.json), unless explicitly disabled.
+  // Enable when a transport is configured (env or config.json), unless explicitly disabled.
   if (env.SMTP_ENABLED != null && env.SMTP_ENABLED !== '') e.enabled = bool(env.SMTP_ENABLED);
-  else if (env.SMTP_HOST) e.enabled = true;
+  else if (env.SMTP_HOST || e.resendApiKey) e.enabled = true;
   CFG.notify.email = e;
 })();
 if (process.env.TEAMS_WEBHOOK_URL) CFG.notify.teamsWebhookUrl = process.env.TEAMS_WEBHOOK_URL;
@@ -420,7 +424,7 @@ function appBaseUrl(){
   const e=process.env, raw=String(e.APP_URL||'').trim() || (e.VERCEL_PROJECT_PRODUCTION_URL?'https://'+String(e.VERCEL_PROJECT_PRODUCTION_URL).trim():'') || (e.APP_HOST?'https://'+String(e.APP_HOST).trim():'');
   const u=raw.replace(/\/+$/,''); return /^https?:\/\/[^\s/?#]+(\/[^\s?#]*)?$/i.test(u) ? u : ''; // malformed -> no e-mailed links
 }
-function emailEnabled(){ const e=(CFG.notify && CFG.notify.email) || {}; return !!(e.enabled && e.smtpHost); }
+function emailEnabled(){ return EMAIL.isEnabled(CFG.notify && CFG.notify.email); }
 function resetEmailAvailable(){ return emailEnabled() && !!appBaseUrl(); }
 /* Hash fragment (#reset=) so the token never reaches a server in a URL, access log or Referer. */
 function resetEmailMsg(u, token, ttlMs){
@@ -435,7 +439,16 @@ function resetEmailMsg(u, token, ttlMs){
     '<p style="color:#64748b">If you did not ask for this, ignore this e-mail; your password is unchanged.</p></div>';
   return { to:[u.email], subject:'Golden QA: reset your password', text, html };
 }
-function alertAll(title, text){ try{ NOTIFY.alert(CFG, title, text); }catch(e){} EMAIL.send(CFG, { subject:title, text:text }).then(r=>{ if(r && !r.ok && r.error!=='email disabled') console.log('EMAIL send:', r.error); }).catch(()=>{}); }
+/* Non-blocking e-mail (alerts, checklist mail, reminders, scheduled report). Each send is tracked
+   until it settles: on serverless the function is frozen once the response goes out (and the dedupe
+   flags are already saved), so handleRequest waits for these first. Never rejects. */
+const _pendingMail = new Set();
+function sendMailBg(msg, label){
+  const p = EMAIL.send(CFG, msg).then(r=>{ if(r && !r.ok && r.error!=='email disabled') console.log(label+':', r.error); }).catch(()=>{});
+  _pendingMail.add(p); p.then(()=>_pendingMail.delete(p));
+  return p;
+}
+function alertAll(title, text){ try{ NOTIFY.alert(CFG, title, text); }catch(e){} sendMailBg({ subject:title, text:text }, 'EMAIL send'); }
 /* API-key auth (read-only). Keys are stored hashed; the plaintext is shown once at creation. */
 function hashKey(k){ return crypto.createHash('sha256').update(String(k)).digest('hex'); }
 function apiKeyUser(req){ const k=req.headers['x-api-key']; if(!k) return null; const rec=(DB.apikeys||[]).find(a=>a.active!==false && a.keyHash===hashKey(k)); if(!rec) return null; rec.lastUsed=new Date().toISOString(); return { id:'apikey:'+rec.id, name:rec.name+' (API key)', role:'QA Officer', _apikey:rec.id }; }
@@ -666,7 +679,7 @@ function emailChecklist(sub, def, event){
     if(_emailThrottle.size>2000){ for(const [k,v] of _emailThrottle){ if(now-v>EMAIL_COOLDOWN_MS) _emailThrottle.delete(k); } }
     const to=checklistRecipients();
     const subject=CFG.orgName+' — '+sub.code+' '+(event||'submitted')+' ('+sub.date+')';
-    if(to.length) EMAIL.send(CFG, { to, subject, text:checklistEmailText(sub), html:checklistEmailHtml(sub, def) }).then(r=>{ if(r&&!r.ok&&r.error!=='email disabled') console.log('Checklist email:', r.error); }).catch(()=>{});
+    if(to.length) sendMailBg({ to, subject, text:checklistEmailText(sub), html:checklistEmailHtml(sub, def) }, 'Checklist email');
     try{ NOTIFY.alert(CFG, subject, checklistEmailText(sub)); }catch(e){}
     fireEvent(event==='verified'?'checklist.verified':'checklist.completed', { id:sub.id, code:sub.code, date:sub.date, status:sub.status, unsatisfactory:(sub.responses||[]).filter(r=>r.status&&r.status!=='Yes').length });
   }catch(e){ console.warn('emailChecklist failed:', e && e.message); }
@@ -1170,7 +1183,7 @@ async function api(req, res, url) {
       let emailed=false;
       if(b.email===true){
         if(!u.email) return send(res,400,{error:'This user has no e-mail address on file — copy the link and give it to them instead.'});
-        if(!emailEnabled()) return send(res,400,{error:'E-mail (SMTP) is not configured on this server — copy the link and give it to the user instead.'});
+        if(!emailEnabled()) return send(res,400,{error:'E-mail is not configured on this server (RESEND_API_KEY or SMTP_HOST) — copy the link and give it to the user instead.'});
         if(!appBaseUrl()) return send(res,400,{error:'APP_URL is not set, so the server cannot build a link to e-mail — copy the link and give it to the user instead.'});
         const r=await EMAIL.send(CFG, resetEmailMsg(u, token, RESET_ADMIN_MS)); // awaited: serverless freezes after the response
         if(!r || !r.ok) return send(res,502,{error:'Could not send the e-mail ('+((r&&r.error)||'unknown error')+') — copy the link instead.'});
@@ -1902,7 +1915,7 @@ function maybeSendScheduledReport(){
     if(!due) return;
     DB.lastReportDate=today;
     const d=buildDigest(); const subject=CFG.orgName+' — Scheduled QA Report '+today;
-    EMAIL.send(CFG,{ subject, text:digestText(d), html:digestHtml(d) }).then(r=>{ if(r&&!r.ok&&r.error!=='email disabled') console.log('Scheduled report email:', r.error); }).catch(()=>{});
+    sendMailBg({ subject, text:digestText(d), html:digestHtml(d) }, 'Scheduled report email');
     try{ NOTIFY.alert(CFG, subject, digestText(d)); }catch(e){}
     audit(null,'scheduled-report','', sched+' report sent'); saveDB();
   }catch(e){ console.warn('Scheduled report check failed:', e && e.message); }
@@ -1936,7 +1949,7 @@ function checkChecklistReminders(){
         : (d.frequency==='weekly') ? ' Weekly check due this week.'
         : (' Monthly check — '+(d.daysLeft!=null?d.daysLeft+' day(s) left this month.':'due this month.'));
       const text=d.code+' ('+d.title+') has not been completed for '+d.period+'.'+cadence;
-      if(to.length) EMAIL.send(CFG,{ to, subject, text }).then(r=>{ if(r&&!r.ok&&r.error!=='email disabled') console.log('Checklist reminder email:', r.error); }).catch(()=>{});
+      if(to.length) sendMailBg({ to, subject, text }, 'Checklist reminder email');
       try{ NOTIFY.alert(CFG, subject, text); }catch(e){}
       audit(null,'checklist-reminder','',d.code+' '+d.period+' ('+d.status+')');
     });
@@ -1986,6 +1999,7 @@ function digestHtml(d){
        _saveChain) BEFORE emitting it, so the function can't freeze with a write still in flight.
      - Long-running (local / on-prem container): the same handler runs behind http.createServer
        (see the require.main block below), with the classic setInterval timers restored. */
+let _longRunning = false; // set by the require.main block below (local / on-prem server)
 async function handleRequest(req, res) {
   let url; try { url = new URL(req.url, 'http://x'); } catch (e) { res.writeHead(400); return res.end('bad request'); }
   const method = req.method || 'GET';
@@ -2031,6 +2045,11 @@ async function handleRequest(req, res) {
   } finally {
     if (lock && STORAGE.releaseLock) { try { await STORAGE.releaseLock(lock); } catch (e) {} }
   }
+  // Serverless: let this request's background e-mails (hold/reject/CAPA alerts, checklist mail, cron
+  // reminders + scheduled report) finish before the response freezes the function; each is capped at
+  // 15 s, inside maxDuration. After the lock is released, so it never blocks other writers. The
+  // long-running server keeps them fire-and-forget.
+  if (!_longRunning && _pendingMail.size) await Promise.all([..._pendingMail]);
   // A handler may hold its answer to a minimum time (POST /api/password/forgot). Waited out here,
   // AFTER the write lock is released, so the padding never blocks other writers.
   if (res._notBefore) { const w = res._notBefore - Date.now(); if (w > 0) await new Promise(r => setTimeout(r, w)); }
@@ -2051,6 +2070,7 @@ const HOST = process.env.HOST || CFG.host;
    Skipped on Vercel, where api/index.js require()s this module and the platform owns the
    process lifecycle + scheduling (Vercel Cron drives the jobs the timers below would). */
 if (require.main === module) {
+  _longRunning = true;
   const server = http.createServer(handleRequest);
   let _shuttingDown = false;
   function shutdown(sig){ if(_shuttingDown) return; _shuttingDown=true; console.log('Shutting down ('+sig+')…'); server.close(async ()=>{ try{ await _saveChain; }catch(e){} try{ await Promise.resolve(STORAGE.close && STORAGE.close()); }catch(e){} process.exit(0); }); setTimeout(()=>process.exit(0), 8000).unref(); }

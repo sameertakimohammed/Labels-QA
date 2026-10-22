@@ -947,7 +947,7 @@ async function loadAnalytics(){
   CHARTS.fpy=new Chart($("#cFpy"),{type:"doughnut",data:{labels:["Released","Other"],datasets:[{data:[a.kpis.firstPassYield,100-a.kpis.firstPassYield],backgroundColor:["#15803d","#e8edf3"]}]},options:{circumference:180,rotation:270}});
 }
 
-async function sendDigest(){ try{ const r=await api("/api/digest/send",{method:"POST"}); if(r.ok) toast("Digest emailed to managers"); else toast("Digest "+(r.teams?"sent to Teams":"not sent")+(r.error&&r.error!=="email disabled"?" — "+r.error:" (configure SMTP/Teams in Admin)")); }catch(e){ toast(e.message); } }
+async function sendDigest(){ try{ const r=await api("/api/digest/send",{method:"POST"}); if(r.ok) toast("Digest emailed to managers"); else toast("Digest "+(r.teams?"sent to Teams":"not sent")+(r.error&&r.error!=="email disabled"?" — "+r.error:" (e-mail and Teams are not configured)")); }catch(e){ toast(e.message); } }
 
 /* CAPA — corrective & preventive actions */
 async function capaPage(){

@@ -137,14 +137,16 @@ In Portainer: **Stacks → Add stack → Repository**.
    | `SECRET_KEY` | yes | Session-signing secret, ≥ 16 alphanumeric chars (from §2). |
    | `ADMIN_USERNAME` | optional | Seed admin login; defaults to `admin`. |
    | `ADMIN_PASSWORD` | yes (first run) | Seed admin password — used **only** to create the first admin on an empty DB. |
-   | `SMTP_HOST` | optional | **Turns manager e-mail ON.** SMTP relay host. Blank = e-mail off (no-op). |
+   | `RESEND_API_KEY` | optional | **Turns manager e-mail ON via [Resend](https://resend.com)** (HTTPS API — the host needs outbound HTTPS to `api.resend.com`). A sending-only key restricted to the verified domain (`gml.com.fj`). Alternative to `SMTP_HOST`; if both are set, Resend wins. |
+   | `EMAIL_FROM` | optional | Sender for either transport, e.g. `Golden QA <qa@gml.com.fj>`; overrides `SMTP_FROM`. **Required with Resend** and must be on the verified domain. |
+   | `SMTP_HOST` | optional | **Turns manager e-mail ON** via an SMTP relay. Blank (and no `RESEND_API_KEY`) = e-mail off (no-op). |
    | `SMTP_PORT` | optional | `587` (STARTTLS, default) or `465` (implicit TLS). |
    | `SMTP_SECURE` | optional | `true` for implicit TLS (465); `false`/blank for STARTTLS (587). |
    | `SMTP_USER` / `SMTP_PASS` | optional | Only for an **authenticated** relay; omit for an internal relay that accepts unauthenticated mail from the host. |
-   | `SMTP_FROM` | optional | From address, e.g. `golden-qa@golden.com.fj`. |
-   | `NOTIFY_EMAIL_TO` | optional | Comma-separated always-notify recipients (managers/supervisors), in addition to users who have an e-mail on their account. |
+   | `SMTP_FROM` | optional | From address for SMTP, e.g. `golden-qa@golden.com.fj` (`EMAIL_FROM` wins if set). |
+   | `NOTIFY_EMAIL_TO` | optional | Comma-separated always-notify recipients (managers/supervisors). The **only** recipients of hold/reject/CAPA/reset-request alerts and the digest/scheduled report; checklist e-mails and reminders go to them **plus** Supervisors/QM/Admins who have an e-mail on their account. Replaces `config.json` `notify.email.to` (blank = that list). |
    | `TEAMS_WEBHOOK_URL` | optional | Microsoft Teams incoming-webhook URL — mirrors the same alerts. |
-   | `APP_URL` | optional | Public base URL put in e-mailed password-reset links. Blank = `https://$APP_HOST`. Never taken from the request `Host` header. E-mailed links also need `SMTP_HOST`. |
+   | `APP_URL` | optional | Public base URL put in e-mailed password-reset links. Blank = `https://$APP_HOST`. Never taken from the request `Host` header. E-mailed links also need e-mail on (`RESEND_API_KEY` or `SMTP_HOST`). |
    | `PASSWORD_RESET_MINUTES` / `PASSWORD_RESET_ADMIN_HOURS` | optional | Reset-link lifetimes: e-mailed *Forgot password?* links (default 30 min) and links issued from Team & Access (default 24 h). |
 
    Non-secret runtime values are fixed in the compose file (`NODE_ENV=production`,
@@ -152,12 +154,14 @@ In Portainer: **Stacks → Add stack → Repository**.
    settings live in the committed `config.json`. **Do not** put secrets in
    `config.json` — they come only from env.
 
-   **Enable manager e-mail** (checklist alerts, hold/reject, digest): set at least
-   `SMTP_HOST` (+ `SMTP_FROM`). For an authenticated relay add `SMTP_USER`/`SMTP_PASS` and
-   the right `SMTP_PORT`/`SMTP_SECURE`. Add `NOTIFY_EMAIL_TO` so alerts reach managers even
-   before staff e-mails are filled in. After redeploy, send a test from **Reports → Email
+   **Enable manager e-mail** (checklist alerts, hold/reject, digest, reset links): set either
+   `RESEND_API_KEY` + `EMAIL_FROM` (Resend), or at least `SMTP_HOST` (+ `SMTP_FROM`) for a
+   relay — for an authenticated relay add `SMTP_USER`/`SMTP_PASS` and the right
+   `SMTP_PORT`/`SMTP_SECURE`. Set `NOTIFY_EMAIL_TO` to the managers who should get alerts
+   and the digest — account e-mails only add recipients to checklist e-mails/reminders, and a
+   blank `NOTIFY_EMAIL_TO` sends alerts to `config.json` `notify.email.to`. After redeploy, send a test from **Reports → Email
    digest to managers** (or trigger a checklist completion) and confirm delivery. Leaving
-   `SMTP_HOST` blank keeps e-mail disabled (the app just skips it).
+   both `RESEND_API_KEY` and `SMTP_HOST` blank keeps e-mail disabled (the app just skips it).
 
 7. **Deploy the stack.** Portainer creates the containers, the named volumes
    (`goldenqa_pgdata`, `goldenqa_uploads`, `goldenqa_backups`), and attaches the app

@@ -48,7 +48,7 @@ the Starkist paper-label line. Every label job is keyed to a single **Job #** an
   JSON document**, so the data model is identical across the PostgreSQL and JSON-file drivers.
   Production uses **PostgreSQL** (`DATABASE_URL`); with no `DATABASE_URL` it uses a local
   `data/db.json` file with crash-safe atomic writes. Single-writer (one app container).
-- **Integrations** live in `integrations/`: `entraId.js` (SSO), `email.js` (SMTP), `notify.js`
+- **Integrations** live in `integrations/`: `entraId.js` (SSO), `email.js` (Resend API or SMTP), `notify.js`
   (Teams), `backup.js` (rotating snapshots), `webhooks.js` (outbound events).
 
 ## 3. The three inspection stages
@@ -97,8 +97,8 @@ the Starkist paper-label line. Every label job is keyed to a single **Job #** an
   - **Photos** per submission and per line item (server-issued `/uploads/` URLs only; capped at 30 per
     submission, 8 per item).
   - **Instant e-mail** to Quality Manager + Supervisors + Administrators (deduped, plus configured
-    digest recipients) on complete/verify, mirrored to Teams — fire-and-forget, no-ops when SMTP is
-    disabled. Emits a `checklist.completed` webhook.
+    digest recipients) on complete/verify, mirrored to Teams — fire-and-forget, no-ops when e-mail
+    (Resend or SMTP) is not configured. Emits a `checklist.completed` webhook.
   - **Due-tracking** — `GET /api/checklists/due` returns per-form status (`done`/`due`/`overdue` for
     daily before the per-form `dueByHour` cut-off, default noon; `done`/`due`/`scheduled` for monthly,
     "due" in the final week). "Today" is resolved in the plant timezone (`APP_TZ`, default
@@ -120,8 +120,8 @@ the Starkist paper-label line. Every label job is keyed to a single **Job #** an
 **Settings**
 - **Team & Access** *(manager+)* — users, roles, and **per-user stage qualifications**. Quality
   Managers/Administrators get a **Reset link** button on local accounts (a one-time password-reset
-  link to copy, or e-mail when SMTP is set up); a **Reset requested** tag marks users who asked via
-  *Forgot password?*.
+  link to copy, or to e-mail when e-mail (Resend or SMTP) is configured); a **Reset requested** tag
+  marks users who asked via *Forgot password?*.
 - **Amendments History** *(manager+)* — the audit trail, now with **field-level before → after** for
   every change (who / when / which field / old value → new value). Filter by record ID, job, type or
   date; **export to CSV**; or open one record's history via the **Amendments** button on any job,
@@ -192,7 +192,7 @@ Photos and signatures are stored as files under `data/uploads/`.
 | `orgName` | Organisation name shown in the UI and reports |
 | `ldap` | Local Active Directory (LDAPS) sign-in — `enabled` + `LDAP_*` env + `roleGroups` group→role map (`deploy/AD-SSO-SETUP.md`) |
 | `sso` | Cloud Microsoft Entra ID sign-in (off by default). Fill `tenantId`/`clientId` to require real Entra ID `id_token` validation (`deploy/ENTRA-SSO-SETUP.md`) |
-| `notify.email` | SMTP for hold/reject alerts + digests (`secure:true`=465 implicit TLS, `false`=587 STARTTLS) |
+| `notify.email` | SMTP for hold/reject alerts + digests (`secure:true`=465 implicit TLS, `false`=587 STARTTLS). Resend is configured by env only (`RESEND_API_KEY`, below) — never put the key here |
 | `notify.teamsWebhookUrl` | Microsoft Teams Incoming Webhook for alerts/digest |
 | `tolerances` | COF min/max, registration max (mm), barcode min grade — drive auto pass/fail and SPC limits |
 | `storage` | Ignored when `DATABASE_URL` is set (production uses PostgreSQL); otherwise a local `data/db.json` file |
@@ -205,15 +205,22 @@ Photos and signatures are stored as files under `data/uploads/`.
 `DATABASE_URL` (enables PostgreSQL), `ADMIN_USERNAME` / `ADMIN_PASSWORD` (seed the first admin),
 `BACKUP_DIR`, `METRICS_TOKEN`.
 
+**E-mail** (alerts, digests, checklist e-mails, reset links): `RESEND_API_KEY` (Resend HTTP API —
+recommended on Vercel) or `SMTP_HOST` / `SMTP_PORT` / `SMTP_SECURE` / `SMTP_USER` / `SMTP_PASS` (relay)
+turns it on; if both are set, Resend wins, and `SMTP_ENABLED=false` forces e-mail off. `EMAIL_FROM` is
+the sender (required with Resend and must be on its verified domain, e.g. `Golden QA <qa@gml.com.fj>`;
+`SMTP_FROM` is the older name, `EMAIL_FROM` wins), `NOTIFY_EMAIL_TO` the always-notify recipients.
+
 **Password reset:** `PASSWORD_RESET_MINUTES` (lifetime of a self-service, e-mailed link; default
 `30`), `PASSWORD_RESET_ADMIN_HOURS` (lifetime of a link issued from Team & Access; default `24`),
 `APP_URL` (public base URL put in e-mailed links, e.g. `https://goldenqa.gml.com.fj`; if unset the
 server uses `https://$VERCEL_PROJECT_PRODUCTION_URL`, which Vercel sets automatically, then
 `https://$APP_HOST`). The base URL is **never** taken from the request's `Host` header (that would
 let an attacker get reset e-mails pointing at their own site). E-mailed links need **all three** of:
-SMTP configured (`SMTP_HOST`… / `notify.email`), a base URL, and an e-mail address on the account —
-otherwise *Forgot password?* falls back to notifying the managers, and Team & Access still issues
-copyable links. `GET /api/config` reports `passwordReset.email` = SMTP enabled **and** a base URL
+e-mail configured (Resend or SMTP: `RESEND_API_KEY` or `SMTP_HOST`… / `notify.email`), a base URL,
+and an e-mail address on the account — otherwise *Forgot password?* falls back to notifying the
+managers, and Team & Access still issues copyable links. `GET /api/config` reports
+`passwordReset.email` = e-mail enabled **and** a base URL
 present, `passwordReset.minutes` = the e-mailed link lifetime (shown on the sign-in screen), and
 `passwordReset.directory` = AD sign-in is on (the sign-in screen then says Windows passwords are reset
 by IT).
@@ -236,12 +243,14 @@ by IT).
   until it expires (lower `PASSWORD_RESET_ADMIN_HOURS` for shared-tablet sites). Only active local
   accounts qualify (not AD, not archived). *Forgot password?* always answers the same generic 200 and
   does the same work for every outcome (an audit entry + a save), so the body and the timing don't
-  reveal accounts; with e-mail on, where a real account with an e-mail address also waits on SMTP,
+  reveal accounts; with e-mail on, where a real account with an e-mail address also waits on the send,
   every answer is held to at least 3 s — only a mail server slower than that still shows in the
   timing. It is throttled per IP (5 / 15 min → 429) and per account (one e-mail/alert per 5 min). A
   request records `resetRequestedAt` (shown as **Reset requested** in Team & Access until the password
-  changes or the user signs in); when no link could be e-mailed it also alerts managers via Teams /
-  `NOTIFY_EMAIL_TO` if configured (best-effort — without them nobody is pushed an alert). Requests,
+  changes or the user signs in); when no link could be e-mailed it also alerts managers: by e-mail
+  when e-mail is on (to `NOTIFY_EMAIL_TO`, or `config.json` `notify.email.to` if that is unset, so
+  someone is always e-mailed) and via Teams if configured (Teams is best-effort on serverless). Only
+  with e-mail off and no Teams webhook is nobody pushed an alert. Requests,
   issued links and resets are all audited (`password-reset-request`, `issue-reset-link`,
   `password-reset`).
 - **Tamper-evident audit trail** — each entry is HMAC-chained (key = `SECRET_KEY`) to the previous;
@@ -254,7 +263,7 @@ by IT).
 ## 9. Integrations & automation
 
 - **Microsoft Entra ID SSO** — `deploy/ENTRA-SSO-SETUP.md`.
-- **Alerts** — hold/reject events and the manager digest go to Teams (webhook) and/or e-mail (SMTP).
+- **Alerts** — hold/reject events and the manager digest go to Teams (webhook) and/or e-mail (Resend or SMTP).
 - **Scheduled reports** — automatic digest on a daily/weekly/monthly cadence (`config.reports`).
 - **REST API keys** — `x-api-key: gqa_…` header, **read-only**, for BI tools. Manage in Integrations.
 - **Webhooks** — signed JSON POST (`X-GQA-Signature` HMAC) on `job.released`, `job.hold`,
@@ -275,8 +284,9 @@ by IT).
 - **On-prem (simple):** `node server.js` → `http://<server-ip>:3000`. See `DEPLOYMENT.md`.
 - **Container (production):** Portainer **GitOps** + Traefik v3 — see `CONTAINER-DEPLOY.md`.
   Portainer polls `main` and redeploys on each new commit; Traefik terminates TLS and routes by host.
-- **CI:** `.github/workflows/ci.yml` runs `node --check` on all JS plus the smoke test
-  (`npm test`) on Node 20 & 24 for every PR/push to `main`.
+- **CI:** `.github/workflows/ci.yml` runs `node --check` on all JS plus the smoke tests
+  (`npm test`: API, AD sign-in, reset e-mail over a stub SMTP server, and the Resend transport
+  against a stub Resend API) on Node 20 & 24 for every PR/push to `main`.
 
 ## 12. REST API reference (summary)
 

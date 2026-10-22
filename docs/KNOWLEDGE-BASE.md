@@ -70,7 +70,8 @@ link already — check with them before issuing another.
 temporary password in **Edit** (and give it to the person, or issue them a fresh link afterwards):
 any password change kills every outstanding link for that account.
 (Link lifetimes are set by `PASSWORD_RESET_MINUTES` / `PASSWORD_RESET_ADMIN_HOURS`; e-mailed links
-need SMTP plus the app's public address — see [SYSTEM-GUIDE §7](SYSTEM-GUIDE.md#7-configuration-configjson).)
+need e-mail configured (Resend: `RESEND_API_KEY` + `EMAIL_FROM`, or SMTP: `SMTP_HOST`…) plus the
+app's public address (`APP_URL`) — see [SYSTEM-GUIDE §7](SYSTEM-GUIDE.md#7-configuration-configjson).)
 
 **Last resort — no admin can sign in at all** (e.g. the only admin forgot theirs and has no e-mail):
 someone with access to the Docker host runs the break-glass reset inside the app container — it
@@ -233,7 +234,7 @@ Full steps in **A4**.
 |---|---|
 | **"Too many failed attempts… try again in N min"** (429) | Login lockout after repeated wrong passwords. Wait out the cool-off, or an admin can restart the app (the throttle is in-memory). Forgot it entirely? See **A4** — resetting the password also lifts the lockout. |
 | **"This reset link is invalid or has expired. Ask for a new one."** | The link was already used, has expired (30 min for an e-mailed link, 24 h for one from a manager), the password or the account's role was changed after it was issued, the account was archived, or the link got cut off when copied. Tap **Forgot password?** again or ask a manager for a fresh **Reset link** (**A4**). |
-| **Asked for a reset but no e-mail arrived** | Your account has no e-mail address, the server has no SMTP/public address configured, or it went to spam. Without e-mail the request shows as **Reset requested** in Team & Access — ask a Quality Manager/Administrator for a reset link (**A4**). |
+| **Asked for a reset but no e-mail arrived** | Your account has no e-mail address, the server has no e-mail (Resend or SMTP) or public address (`APP_URL`) configured, the send was rejected (e.g. `EMAIL_FROM` not on the Resend-verified domain — see the server log), or it went to spam. Without e-mail the request shows as **Reset requested** in Team & Access — ask a Quality Manager/Administrator for a reset link (**A4**). |
 | **"Couldn't reach the server to check this link"** | The tablet is offline or the server didn't answer. The link isn't used up: reconnect and tap **Try again**, or open the link again later. |
 | **No "Reset link" button on a user** | Only a Quality Manager/Administrator sees it; it's hidden on archived and Active Directory accounts, and on Administrator accounts unless you are an Administrator. |
 | **"Not qualified to sign off Stage N"** (403) | Competency enforcement is on and you aren't qualified for that stage. An admin adds the stage in **Team & Access**, or an Administrator signs off. |

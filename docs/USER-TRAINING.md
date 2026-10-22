@@ -190,8 +190,10 @@ backup** (takes a safety snapshot first, then replaces all data). Always copy ba
 - Configure **Microsoft Entra ID SSO** (`deploy/ENTRA-SSO-SETUP.md`) for real Microsoft logins.
 - Review the **login-lockout** thresholds (`config.security`).
 - **Password resets** — reset links are one-time and short-lived; hand them only to the person.
-  To have *Forgot password?* e-mail links automatically, configure SMTP (`SMTP_*`) and make sure the
-  app knows its public address (`APP_URL`; on Vercel the production URL is used automatically).
+  To have *Forgot password?* e-mail links automatically, configure e-mail (Resend:
+  `RESEND_API_KEY` + `EMAIL_FROM`; or SMTP: `SMTP_*`) and make sure the app knows its public address
+  (`APP_URL`; on Vercel the production URL is used automatically). Users also need an e-mail
+  address on their account (Team & Access).
 
 > **Exercise (Administrator):** create a test user qualified for Printing only, turn on
 > competency enforcement, confirm they're blocked on Sheeting / Slitting, issue a read-only API key

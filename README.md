@@ -31,7 +31,7 @@ zero-dependency **JSON file** — no separate database needed to try it out.
 To keep it running after logoff, install it as a service (Windows: `nssm`, or Task Scheduler;
 Linux: `systemd` or `pm2`). See section 7.
 
-> **Full step-by-step install, HTTPS, service, backup and upgrade instructions are in [DEPLOYMENT.md](DEPLOYMENT.md) and the [`deploy/`](deploy) folder.** Run `npm test` for a quick smoke test of the API.
+> **Full step-by-step install, HTTPS, service, backup and upgrade instructions are in [DEPLOYMENT.md](DEPLOYMENT.md) and the [`deploy/`](deploy) folder.** Run `npm test` for quick smoke tests (API, AD sign-in, and reset e-mails through stub SMTP and Resend servers).
 
 ### Default sign-ins (username / password — change before go-live)
 | Username | Name | Role | Password |
@@ -42,7 +42,7 @@ Linux: `systemd` or `pm2`). See section 7.
 | `akumar` | A. Kumar | QA Officer | `kumar123` |
 | `pdevi` | P. Devi | QA Officer | `devi123` |
 
-Passwords are salted and hashed with **scrypt**. Change them in **Admin → Users**. Forgotten password? Tap **Forgot password?** on the sign-in screen — it e-mails a one-time link automatically when SMTP and the public URL are configured and the account has an e-mail address, and otherwise flags the request in **Team & Access**. There a Quality Manager/Administrator issues a one-time **Reset link** to copy and hand over, or sends it with **E-mail it to …** under the same conditions (see [Knowledge Base A4](docs/KNOWLEDGE-BASE.md#a4-forgot-your-password)). For production, wire the app to your **local Active Directory** so staff sign in with their domain accounts (see [deploy/AD-SSO-SETUP.md](deploy/AD-SSO-SETUP.md)); the seeded admin above stays as a local break-glass account. Locked out of every admin account? Run `node scripts/reset-password.js <username>` inside the app container (or locally against Supabase for the Vercel deploy) (see [Knowledge Base A4](docs/KNOWLEDGE-BASE.md)).
+Passwords are salted and hashed with **scrypt**. Change them in **Admin → Users**. Forgotten password? Tap **Forgot password?** on the sign-in screen — it e-mails a one-time link automatically when e-mail (Resend or SMTP) and the public URL are configured and the account has an e-mail address, and otherwise flags the request in **Team & Access**. There a Quality Manager/Administrator issues a one-time **Reset link** to copy and hand over, or sends it with **E-mail it to …** under the same conditions (see [Knowledge Base A4](docs/KNOWLEDGE-BASE.md#a4-forgot-your-password)). For production, wire the app to your **local Active Directory** so staff sign in with their domain accounts (see [deploy/AD-SSO-SETUP.md](deploy/AD-SSO-SETUP.md)); the seeded admin above stays as a local break-glass account. Locked out of every admin account? Run `node scripts/reset-password.js <username>` inside the app container (or locally against Supabase for the Vercel deploy) (see [Knowledge Base A4](docs/KNOWLEDGE-BASE.md)).
 
 ---
 
@@ -78,11 +78,11 @@ Passwords are salted and hashed with **scrypt**. Change them in **Admin → User
     (📷 in each row). Great for evidencing a defect or a cleaned surface.
   - **Instant e-mail** — completing (or verifying) a checklist immediately e-mails the inspection to
     the **Quality Manager, Supervisors and Administrators** (plus any digest recipients) and mirrors to
-    Teams. *Requires SMTP configured in `config.json → notify.email`* (see §4); if SMTP is off it
-    silently no-ops.
+    Teams. *Requires e-mail configured* — Resend (`RESEND_API_KEY` + `EMAIL_FROM` env) or SMTP
+    (`SMTP_*` env / `config.json → notify.email`, see §4); if e-mail is off it silently no-ops.
   - **Due-tracking & reminders** — the Checklists page shows a **"Checks due"** panel: daily forms are
     flagged **due before mid-day** (overdue after), monthly forms surface **toward month-end**. An
-    hourly job e-mails a reminder for anything overdue/outstanding (same SMTP requirement). The daily
+    hourly job e-mails a reminder for anything overdue/outstanding (same e-mail requirement). The daily
     cut-off hour is configurable per form (default noon).
 
 ### Amendments History
@@ -102,7 +102,7 @@ item or checklist.
 | `port` / `host` | Server address (default 3000 on all interfaces) |
 | `ldap` | **Local Active Directory** sign-in (LDAPS). Set `ldap.enabled` + the `LDAP_*` env vars and map AD groups to roles in `ldap.roleGroups` (see [deploy/AD-SSO-SETUP.md](deploy/AD-SSO-SETUP.md)). This is the recommended production auth. |
 | `sso` | Cloud **Microsoft Entra ID** sign-in (needs internet), disabled by default. Fill `tenantId`/`clientId` with your Entra App registration GUIDs to require real `id_token` validation (see [deploy/ENTRA-SSO-SETUP.md](deploy/ENTRA-SSO-SETUP.md)) |
-| `notify.email` | SMTP details for hold/reject alerts and the manager digest. `secure:true` = implicit TLS (465); `secure:false` = STARTTLS (587); leave `user`/`pass` blank for an unauthenticated relay |
+| `notify.email` | SMTP details for hold/reject alerts and the manager digest. `secure:true` = implicit TLS (465); `secure:false` = STARTTLS (587); leave `user`/`pass` blank for an unauthenticated relay. To send through **Resend** instead (recommended on Vercel), set the `RESEND_API_KEY` + `EMAIL_FROM` env vars — never put the key in `config.json` |
 | `storage` | Ignored when `DATABASE_URL` is set — the containerised deploy always uses **PostgreSQL**. Without `DATABASE_URL` the app uses a local `data/db.json` file (dev / single-box on-prem). |
 | `backup` | Automatic rotating snapshots of `data/db.json` into `data/backups/` — `intervalMin` between snapshots, `keep` = how many to retain |
 | `notify` | Paste a **Teams Incoming Webhook URL** and/or SMTP details to get hold/reject alerts |
@@ -112,8 +112,8 @@ item or checklist.
 
 ## 5. Integrations
 
-- **Alerts**: hold/reject events call `integrations/notify.js` (Teams webhook now; SMTP email
-  hook ready to wire to your relay).
+- **Alerts**: hold/reject events call `integrations/notify.js` (Teams webhook) and
+  `integrations/email.js` (Resend HTTP API, or an SMTP relay).
 
 ---
 
