@@ -249,9 +249,10 @@ by IT).
   timing. It is throttled per IP (5 / 15 min → 429) and per account (one e-mail/alert per 5 min). A
   request records `resetRequestedAt` (shown as **Reset requested** in Team & Access until the password
   changes or the user signs in); when no link could be e-mailed it also sends an admin-side alert: by e-mail
-  when e-mail is on, to the active Administrator accounts that have an e-mail address (if none has one,
-  to `NOTIFY_EMAIL_TO` / `config.json` `notify.email.to` instead, plus Teams if configured — Teams is
-  best-effort on serverless). Operational alerts (hold/reject/CAPA, digest) never go to Administrators
+  when e-mail is on, to the active Administrator accounts that have an e-mail address. When that e-mail
+  can't go out (e-mail off, no Administrator e-mail, or the send fails) it is posted to Teams instead
+  if configured (best-effort on serverless); with no Administrator e-mail on file it is also e-mailed
+  to `NOTIFY_EMAIL_TO` / `config.json` `notify.email.to`. Operational alerts (hold/reject/CAPA, digest) never go to Administrators
   unless they are listed in `NOTIFY_EMAIL_TO`; checklist e-mails go to Supervisors/Quality Managers. Only
   with e-mail off and no Teams webhook is nobody pushed an alert. Requests,
   issued links and resets are all audited (`password-reset-request`, `issue-reset-link`,

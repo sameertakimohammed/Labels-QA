@@ -136,8 +136,9 @@ configured, or the send failed — the request shows as **Reset requested** in *
 Quality Manager/Administrator clicks **Reset link** and hands the person a one-time link (valid 24 h
 by default). For those requests the Administrators get a *Password reset requested* e-mail (every active
 Administrator account with an e-mail address; if none has one, it goes to `NOTIFY_EMAIL_TO` /
-`config.json` `notify.email.to` instead) when e-mail is configured, plus a Teams post if
-`TEAMS_WEBHOOK_URL` is set and no Administrator has an e-mail. With neither, **nobody is alerted** — managers must check Team &
+`config.json` `notify.email.to` instead) when e-mail is configured. The alert is posted to Teams
+(if `TEAMS_WEBHOOK_URL` is set) instead whenever that e-mail can't go out: e-mail off, no
+Administrator e-mail, or the send failed. With neither e-mail nor Teams, **nobody is alerted** — managers must check Team &
 Access (the user is told to ask them). On Vercel every e-mail — alerts, checklist e-mails, cron
 reminders and the scheduled report as well as the reset links — finishes sending before the response
 goes out, so a frozen function can't drop it; only the Teams post is best-effort (it isn't awaited,

@@ -443,18 +443,22 @@ function resetEmailMsg(u, token, ttlMs){
    until it settles: on serverless the function is frozen once the response goes out (and the dedupe
    flags are already saved), so handleRequest waits for these first. Never rejects. */
 const _pendingMail = new Set();
-function sendMailBg(msg, label){
-  const p = EMAIL.send(CFG, msg).then(r=>{ if(r && !r.ok && r.error!=='email disabled') console.log(label+':', r.error); }).catch(()=>{});
+function sendMailBg(msg, label, onFail){
+  const p = EMAIL.send(CFG, msg).then(r=>{ if(r && !r.ok && r.error!=='email disabled') console.log(label+':', r.error); if((!r || !r.ok) && onFail) onFail(); }).catch(()=>{});
   _pendingMail.add(p); p.then(()=>_pendingMail.delete(p));
   return p;
 }
 function alertAll(title, text){ try{ NOTIFY.alert(CFG, title, text); }catch(e){} sendMailBg({ subject:title, text:text }, 'EMAIL send'); }
 /* Admin-side alerts (account / access housekeeping, e.g. "Password reset requested") go to the active
    Administrator accounts that have an e-mail on file — not to the operational list (NOTIFY_EMAIL_TO),
-   which is for the QA managers. With no Administrator e-mail on file they fall back to alertAll so a
-   request is never silently dropped. */
+   which is for the QA managers. Whenever that e-mail can't go out — e-mail off, no Administrator e-mail
+   on file — they fall back to alertAll (Teams + log + the operational list), and a send that fails still
+   posts to Teams and the log, so a request is never silently dropped. */
 function adminRecipients(){ return [...new Set((DB.users||[]).filter(u=>u.role==='Administrator' && !u.archived && EMAIL_RE.test(String(u.email||''))).map(u=>u.email.toLowerCase()))]; }
-function alertAdmins(title, text){ const to=adminRecipients(); if(!to.length) return alertAll(title, text); sendMailBg({ to, subject:title, text:text }, 'Admin alert e-mail'); }
+function alertAdmins(title, text){
+  const to=adminRecipients(); if(!to.length || !emailEnabled()) return alertAll(title, text);
+  sendMailBg({ to, subject:title, text:text }, 'Admin alert e-mail', ()=>{ try{ NOTIFY.alert(CFG, title, text); }catch(e){} });
+}
 /* API-key auth (read-only). Keys are stored hashed; the plaintext is shown once at creation. */
 function hashKey(k){ return crypto.createHash('sha256').update(String(k)).digest('hex'); }
 function apiKeyUser(req){ const k=req.headers['x-api-key']; if(!k) return null; const rec=(DB.apikeys||[]).find(a=>a.active!==false && a.keyHash===hashKey(k)); if(!rec) return null; rec.lastUsed=new Date().toISOString(); return { id:'apikey:'+rec.id, name:rec.name+' (API key)', role:'QA Officer', _apikey:rec.id }; }

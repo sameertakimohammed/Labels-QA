@@ -35,8 +35,8 @@ You can reset it yourself — nobody needs to know or type your new password.
      *"Golden QA: reset your password"* with a link, valid for **30 minutes** — nothing else to do.
      Didn't ask for it? Ignore it — your password is unchanged.
    - **Otherwise** (most floor accounts have no e-mail) → **ask your Quality Manager or
-     Administrator for a reset link**. Managers are only *pushed* an alert if Teams / alert e-mail
-     is configured; otherwise they see the tag when they open Team & Access, so tell them.
+     Administrator for a reset link**. Administrators are e-mailed an alert when e-mail (or Teams)
+     is configured; Quality Managers just see the tag when they open Team & Access, so tell them.
 4. Open the link → **Set a new password for *you*** → type the new password twice (min 6
    characters) → **Save new password**. You're signed straight in.
 
