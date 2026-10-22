@@ -36,9 +36,10 @@ if (PROD && SECRET_KEY.replace(/[^A-Za-z0-9]/g, '').length < 16) {
 const TOKEN_SECRET = SECRET_KEY || 'dev-insecure-secret-change-me';
 const TOKEN_TTL_MS = (Number(process.env.SESSION_HOURS) || 12) * 60 * 60 * 1000;
 
-/* E-mail (SMTP) + Teams: env overrides config.json so relay creds live in the Portainer
-   stack env, never in the repo. Setting SMTP_HOST turns manager e-mail on (unauthenticated
-   relay = host only; authenticated relay = also set SMTP_USER/SMTP_PASS). */
+/* E-mail + Teams: env overrides config.json so credentials live in the Vercel / Portainer stack
+   env, never in the repo. Setting RESEND_API_KEY (Resend HTTP API — the cloud deploy) or SMTP_HOST
+   (on-prem relay; unauthenticated = host only, authenticated = also SMTP_USER/SMTP_PASS) turns
+   e-mail on. Resend wins when both are set. EMAIL_FROM is the sender (SMTP_FROM is the older name). */
 CFG.notify = CFG.notify || {};
 (function applyNotifyEnv(){
   const e = Object.assign({}, CFG.notify.email);
@@ -49,11 +50,14 @@ CFG.notify = CFG.notify || {};
   if (env.SMTP_USER != null && env.SMTP_USER !== '') e.user = env.SMTP_USER;
   if (env.SMTP_PASS != null && env.SMTP_PASS !== '') e.pass = env.SMTP_PASS;
   if (env.SMTP_FROM) e.from = env.SMTP_FROM;
+  if (env.EMAIL_FROM) e.from = env.EMAIL_FROM;
+  if (env.RESEND_API_KEY) e.resendApiKey = env.RESEND_API_KEY.trim();
+  if (env.RESEND_API_URL) e.resendApiUrl = env.RESEND_API_URL; // tests point this at a local stub
   if (env.SMTP_REJECT_UNAUTHORIZED != null && env.SMTP_REJECT_UNAUTHORIZED !== '') e.rejectUnauthorized = bool(env.SMTP_REJECT_UNAUTHORIZED);
   if (env.NOTIFY_EMAIL_TO) e.to = env.NOTIFY_EMAIL_TO.split(',').map(s => s.trim()).filter(Boolean);
-  // Enable when a host is configured (env or config.json), unless explicitly disabled.
+  // Enable when a transport is configured (env or config.json), unless explicitly disabled.
   if (env.SMTP_ENABLED != null && env.SMTP_ENABLED !== '') e.enabled = bool(env.SMTP_ENABLED);
-  else if (env.SMTP_HOST) e.enabled = true;
+  else if (env.SMTP_HOST || e.resendApiKey) e.enabled = true;
   CFG.notify.email = e;
 })();
 if (process.env.TEAMS_WEBHOOK_URL) CFG.notify.teamsWebhookUrl = process.env.TEAMS_WEBHOOK_URL;
@@ -380,20 +384,71 @@ function seedChecklistDefs(){ const now='2026-07-09T00:00:00.000Z';
 /* ---------- helpers ---------- */
 /* Stateless signed session tokens (HMAC). No server-side session store, so logins
    survive restarts/redeploys and work across replicas. Payload carries id/name/role. */
-function signToken(payload){ const body=Buffer.from(JSON.stringify(payload)).toString('base64url'); const sig=crypto.createHmac('sha256',TOKEN_SECRET).update(body).digest('base64url'); return body+'.'+sig; }
-function verifyTokenStr(tok){ if(!tok||typeof tok!=='string') return null; const i=tok.lastIndexOf('.'); if(i<1) return null; const body=tok.slice(0,i), sig=tok.slice(i+1); const exp=crypto.createHmac('sha256',TOKEN_SECRET).update(body).digest('base64url'); if(sig.length!==exp.length||!crypto.timingSafeEqual(Buffer.from(sig),Buffer.from(exp))) return null; let p; try{ p=JSON.parse(Buffer.from(body,'base64url').toString('utf8')); }catch(e){ return null; } if(p.exp && Date.now()>p.exp) return null; return p; }
+function signToken(payload, key){ const body=Buffer.from(JSON.stringify(payload)).toString('base64url'); const sig=crypto.createHmac('sha256',key||TOKEN_SECRET).update(body).digest('base64url'); return body+'.'+sig; }
+function verifyTokenStr(tok, key){ if(!tok||typeof tok!=='string') return null; const i=tok.lastIndexOf('.'); if(i<1) return null; const body=tok.slice(0,i), sig=tok.slice(i+1); const exp=crypto.createHmac('sha256',key||TOKEN_SECRET).update(body).digest('base64url'); if(sig.length!==exp.length||!crypto.timingSafeEqual(Buffer.from(sig),Buffer.from(exp))) return null; let p; try{ p=JSON.parse(Buffer.from(body,'base64url').toString('utf8')); }catch(e){ return null; } if(p.exp && Date.now()>p.exp) return null; return p; }
 /* tv ("token version") binds a password user's session to their current password hash, so
    changing/resetting a password immediately invalidates any tokens issued before the change. */
 function tokenVer(u){ return u && u.passHash ? String(u.passHash).slice(0,12) : ''; }
 function issueToken(u){ return signToken({ uid:u.id, name:u.name, role:u.role, tv:tokenVer(u), exp:Date.now()+TOKEN_TTL_MS }); }
 function userByToken(req) {
   const t=(req.headers['authorization']||'').replace(/^Bearer /,'') || req.headers['x-token']; const p=verifyTokenStr(t); if(!p) return null;
+  if(p.typ) return null; // session tokens carry no typ; anything typed (e.g. pwreset) is never a session (defence in depth: different key too)
   const dbu = DB.users.find(u=>u.id===p.uid);
   if(dbu){ if(dbu.archived) return null; // archiving an account kills its live sessions immediately
     if(dbu.passHash && p.tv && p.tv!==tokenVer(dbu)) return null; return dbu; } // stale after password change
   return { id:p.uid, name:p.name, role:p.role }; // SSO identity not persisted to DB.users
 }
-function alertAll(title, text){ try{ NOTIFY.alert(CFG, title, text); }catch(e){} EMAIL.send(CFG, { subject:title, text:text }).then(r=>{ if(r && !r.ok && r.error!=='email disabled') console.log('EMAIL send:', r.error); }).catch(()=>{}); }
+/* Self-service password reset. Reset tokens use the session-token format but are signed with a key
+   DERIVED from TOKEN_SECRET, so a reset token never verifies as a session token and vice versa. They
+   carry tv (password-hash prefix), so they are single-use for free: once the password changes, every
+   outstanding link for that account dies. Only local password accounts qualify (AD/SSO reset upstream).
+   They also carry the account's role: "only an Administrator may reset an Administrator" is checked
+   when a link is issued, so a role change (e.g. a promotion to Administrator) voids earlier links. */
+const RESET_KEY = crypto.createHmac('sha256', TOKEN_SECRET).update('pwreset-v1').digest();
+// Out-of-range env values (blank, 0, negative, huge) fall back to the default rather than issuing dead links or overflowing Date.
+function envRange(name, def, max){ const n=Number(process.env[name]); return n>0 && n<=max ? n : def; }
+const RESET_SELF_MS = envRange('PASSWORD_RESET_MINUTES', 30, 7*24*60) * 60000;    // e-mailed (self-service) links
+const RESET_ADMIN_MS = envRange('PASSWORD_RESET_ADMIN_HOURS', 24, 30*24) * 3600000; // admin-issued links (handed over in person)
+const RESET_BAD = 'This reset link is invalid or has expired. Ask for a new one.';
+function resetEligible(u){ return !!u && !u.archived && u.source!=='ad' && !!u.passHash; }
+function signResetToken(u, exp){ return signToken({ typ:'pwreset', uid:u.id, tv:tokenVer(u), role:u.role, exp }, RESET_KEY); }
+function verifyResetToken(tok){
+  if(typeof tok!=='string' || tok.length>2048) return null;
+  const p=verifyTokenStr(tok, RESET_KEY); if(!p || p.typ!=='pwreset' || !p.exp) return null;
+  const u=DB.users.find(x=>x.id===p.uid);
+  return resetEligible(u) && p.tv && p.tv===tokenVer(u) && p.role===u.role ? u : null;
+}
+/* Base URL for e-mailed links comes from config ONLY — never the request Host header, which an
+   attacker controls (host-header poisoning would mail a victim a link to the attacker's site). */
+function appBaseUrl(){
+  const e=process.env, raw=String(e.APP_URL||'').trim() || (e.VERCEL_PROJECT_PRODUCTION_URL?'https://'+String(e.VERCEL_PROJECT_PRODUCTION_URL).trim():'') || (e.APP_HOST?'https://'+String(e.APP_HOST).trim():'');
+  const u=raw.replace(/\/+$/,''); return /^https?:\/\/[^\s/?#]+(\/[^\s?#]*)?$/i.test(u) ? u : ''; // malformed -> no e-mailed links
+}
+function emailEnabled(){ return EMAIL.isEnabled(CFG.notify && CFG.notify.email); }
+function resetEmailAvailable(){ return emailEnabled() && !!appBaseUrl(); }
+/* Hash fragment (#reset=) so the token never reaches a server in a URL, access log or Referer. */
+function resetEmailMsg(u, token, ttlMs){
+  const link=appBaseUrl()+'/#reset='+token, mins=Math.round(ttlMs/60000);
+  const valid = mins>=120 && mins%60===0 ? (mins/60)+' hours' : mins+' minutes';
+  const e=s=>String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+  const text=['Hello '+(u.name||u.id)+',','','A password reset was requested for your Golden QA account ('+u.id+').','Open this link to choose a new password. It works once and is valid for '+valid+':','',link,'','If you did not ask for this, ignore this e-mail; your password is unchanged.'].join('\n');
+  // One block per line: SMTP caps a line at 998 chars and relays fold/reject longer ones (which could break the link).
+  const html='<div style="font-family:Arial,sans-serif;font-size:14px;color:#0e2a47"><p>Hello '+e(u.name||u.id)+',</p><p>A password reset was requested for your Golden QA account (<b>'+e(u.id)+'</b>).</p>\n'+
+    '<p><a href="'+e(link)+'" style="display:inline-block;background:#0e2a47;color:#fff;padding:10px 18px;border-radius:6px;text-decoration:none">Set a new password</a></p>\n'+
+    '<p>This link works once and is valid for '+valid+'. If the button does not work, copy this address into your browser:<br><span style="word-break:break-all">'+e(link)+'</span></p>\n'+
+    '<p style="color:#64748b">If you did not ask for this, ignore this e-mail; your password is unchanged.</p></div>';
+  return { to:[u.email], subject:'Golden QA: reset your password', text, html };
+}
+/* Non-blocking e-mail (alerts, checklist mail, reminders, scheduled report). Each send is tracked
+   until it settles: on serverless the function is frozen once the response goes out (and the dedupe
+   flags are already saved), so handleRequest waits for these first. Never rejects. */
+const _pendingMail = new Set();
+function sendMailBg(msg, label){
+  const p = EMAIL.send(CFG, msg).then(r=>{ if(r && !r.ok && r.error!=='email disabled') console.log(label+':', r.error); }).catch(()=>{});
+  _pendingMail.add(p); p.then(()=>_pendingMail.delete(p));
+  return p;
+}
+function alertAll(title, text){ try{ NOTIFY.alert(CFG, title, text); }catch(e){} sendMailBg({ subject:title, text:text }, 'EMAIL send'); }
 /* API-key auth (read-only). Keys are stored hashed; the plaintext is shown once at creation. */
 function hashKey(k){ return crypto.createHash('sha256').update(String(k)).digest('hex'); }
 function apiKeyUser(req){ const k=req.headers['x-api-key']; if(!k) return null; const rec=(DB.apikeys||[]).find(a=>a.active!==false && a.keyHash===hashKey(k)); if(!rec) return null; rec.lastUsed=new Date().toISOString(); return { id:'apikey:'+rec.id, name:rec.name+' (API key)', role:'QA Officer', _apikey:rec.id }; }
@@ -624,7 +679,7 @@ function emailChecklist(sub, def, event){
     if(_emailThrottle.size>2000){ for(const [k,v] of _emailThrottle){ if(now-v>EMAIL_COOLDOWN_MS) _emailThrottle.delete(k); } }
     const to=checklistRecipients();
     const subject=CFG.orgName+' — '+sub.code+' '+(event||'submitted')+' ('+sub.date+')';
-    if(to.length) EMAIL.send(CFG, { to, subject, text:checklistEmailText(sub), html:checklistEmailHtml(sub, def) }).then(r=>{ if(r&&!r.ok&&r.error!=='email disabled') console.log('Checklist email:', r.error); }).catch(()=>{});
+    if(to.length) sendMailBg({ to, subject, text:checklistEmailText(sub), html:checklistEmailHtml(sub, def) }, 'Checklist email');
     try{ NOTIFY.alert(CFG, subject, checklistEmailText(sub)); }catch(e){}
     fireEvent(event==='verified'?'checklist.verified':'checklist.completed', { id:sub.id, code:sub.code, date:sub.date, status:sub.status, unsatisfactory:(sub.responses||[]).filter(r=>r.status&&r.status!=='Yes').length });
   }catch(e){ console.warn('emailChecklist failed:', e && e.message); }
@@ -697,10 +752,26 @@ const LOGIN_MAX_FAILS = Number(SECCFG.maxLoginFails) || 5;
 const LOGIN_WINDOW_MS = (Number(SECCFG.windowMin) || 15) * 60000;
 const LOGIN_LOCK_MS = (Number(SECCFG.lockMin) || 15) * 60000;
 const LOGIN_FAILS = new Map();
-function loginKeyOf(req, username){ const xf=String(req.headers['x-forwarded-for']||'').split(',')[0].trim(); const ip=xf||(req.socket&&req.socket.remoteAddress)||''; return username+'|'+ip; }
+function clientIp(req){ const xf=String(req.headers['x-forwarded-for']||'').split(',')[0].trim(); return xf||(req.socket&&req.socket.remoteAddress)||''; }
+function loginKeyOf(req, username){ return username+'|'+clientIp(req); }
 function loginLockedSec(key){ const r=LOGIN_FAILS.get(key); if(r&&r.lockUntil&&Date.now()<r.lockUntil) return Math.ceil((r.lockUntil-Date.now())/1000); return 0; }
 function loginRecordFail(key){ const now=Date.now(); let r=LOGIN_FAILS.get(key); if(!r||now-r.first>LOGIN_WINDOW_MS) r={count:0,first:now,lockUntil:0}; r.count++; if(r.count>=LOGIN_MAX_FAILS) r.lockUntil=now+LOGIN_LOCK_MS; LOGIN_FAILS.set(key,r); return r; }
 function loginClear(key){ LOGIN_FAILS.delete(key); }
+/* "Forgot password" throttle, per IP: caps e-mail/alert spam and enumeration probing. A 429 says
+   nothing about whether an account exists. In-memory (per instance) like LOGIN_FAILS; the durable
+   per-account cooldown is u.resetRequestedAt. */
+const FORGOT_MAX = 5, FORGOT_WINDOW_MS = 15*60000, FORGOT_HITS = new Map();
+function forgotThrottled(req){
+  const now=Date.now(), ip=clientIp(req); let r=FORGOT_HITS.get(ip);
+  if(!r || now-r.first>FORGOT_WINDOW_MS) r={ count:0, first:now };
+  r.count++; FORGOT_HITS.set(ip, r);
+  if(FORGOT_HITS.size>5000){ for(const [k,v] of FORGOT_HITS){ if(now-v.first>FORGOT_WINDOW_MS) FORGOT_HITS.delete(k); } }
+  return r.count>FORGOT_MAX ? Math.ceil((r.first+FORGOT_WINDOW_MS-now)/1000) : 0;
+}
+const RESET_COOLDOWN_MS = 5*60000; // one reset e-mail/alert per account per 5 min
+/* With e-mail on, only a real account with an e-mail address waits on SMTP, so response time alone
+   would reveal it. Every forgot answer is then held to this minimum (longer than a typical SMTP send). */
+const FORGOT_MIN_MS = 3000;
 
 /* Required fields enforced when a stage is marked complete (mirrored on the client). */
 const STAGE_REQUIRED = {
@@ -841,7 +912,11 @@ async function api(req, res, url) {
     if (localU) {
       if (!checkPw(localU, password)) { recordFail(''); return send(res,401,{error:'Invalid username or password'}); }
       if (localU.archived) { audit(null,'login-denied','', username+' (archived account)'); saveDB(); return send(res,403,{error:'This account has been removed. Ask an administrator to restore it under Team & Access.'}); }
-      loginClear(key); audit(localU,'login'); return send(res,200,{ token:issueToken(localU), user:pubUser(localU) });
+      loginClear(key); audit(localU,'login');
+      // Signing in with the password shows it isn't lost: drop a pending "Forgot password?" request (also
+      // after a break-glass scripts/reset-password.js), so Team & Access stops asking for a reset link.
+      if (localU.resetRequestedAt) { delete localU.resetRequestedAt; saveDB(); }
+      return send(res,200,{ token:issueToken(localU), user:pubUser(localU) });
     }
     // Otherwise authenticate against local Active Directory (if configured).
     if (LDAP.isEnabled(CFG)) {
@@ -855,6 +930,7 @@ async function api(req, res, url) {
       loginClear(key); audit(u,'login','','via Active Directory'); saveDB();
       return send(res,200,{ token:issueToken(u), user:pubUser(u) });
     }
+    hashPw(password, 'no-such-user'); // same scrypt cost as a wrong password, so timing doesn't reveal unknown usernames
     recordFail('');
     return send(res,401,{error:'Invalid username or password'});
   }
@@ -866,7 +942,59 @@ async function api(req, res, url) {
       sso:{ enabled:ssoUsable, clientId:(CFG.sso&&CFG.sso.clientId)||'', tenantId:(CFG.sso&&CFG.sso.tenantId)||'' },
       // The publishable key is safe to expose; the browser needs it to load Clerk.js. Only advertise
       // it when Clerk is actually enabled, so with Clerk off the sign-in screen shows the local form.
-      clerk:{ enabled:CLERK.isEnabled(), publishableKey:CLERK.isEnabled()?CLERK.publishableKey():'' } });
+      clerk:{ enabled:CLERK.isEnabled(), publishableKey:CLERK.isEnabled()?CLERK.publishableKey():'' },
+      // Tells the sign-in screen whether a "forgot password" can be e-mailed (and for how long the link
+      // lives), or only flags an admin. directory: AD sign-in is on, whose passwords IT resets, not this app.
+      passwordReset:{ email:resetEmailAvailable(), minutes:Math.round(RESET_SELF_MS/60000), directory:LDAP.isEnabled(CFG) } });
+  }
+
+  /* ----- self-service password reset (unauthenticated) ----- */
+  if (seg[0]==='password' && seg[1]==='forgot' && !seg[2] && method==='POST') {
+    const wait = forgotThrottled(req);
+    if (wait) return send(res,429,{error:'Too many requests. Try again later.'}, { 'Retry-After':String(wait) });
+    if (resetEmailAvailable()) res._notBefore = Date.now()+FORGOT_MIN_MS; // see FORGOT_MIN_MS; waited out in handleRequest
+    const b = await readBody(req);
+    const ident = String(b.identifier||'').trim().toLowerCase().slice(0,200);
+    // Every outcome below returns the SAME 200 body and does the same work (an audit entry + a save),
+    // so neither the body nor the response time tells a caller which accounts exist.
+    if (!ident) return send(res,200,{ ok:true });
+    const u = DB.users.find(x=>resetEligible(x) && (x.id===ident || (x.email && String(x.email).toLowerCase()===ident)));
+    if (!u) { audit(null,'password-reset-request','', 'no eligible account for "'+ident.replace(/[^a-z0-9@._-]/g,'').slice(0,64)+'"'); saveDB(); return send(res,200,{ ok:true }); }
+    const last = Date.parse(u.resetRequestedAt||'') || 0;
+    if (Date.now()-last < RESET_COOLDOWN_MS) { audit(null,'password-reset-request','', u.id+' (repeat request within cooldown)'); saveDB(); return send(res,200,{ ok:true }); } // no repeat e-mail/alert
+    const stamp = new Date().toISOString();
+    let emailed = false;
+    if (u.email && resetEmailAvailable()) {
+      // Awaited: a serverless function is frozen once the response goes out, so a fire-and-forget send could be lost.
+      const r = await EMAIL.send(CFG, resetEmailMsg(u, signResetToken(u, Date.now()+RESET_SELF_MS), RESET_SELF_MS));
+      emailed = !!(r && r.ok); if (!emailed) console.log('Password reset email:', r && r.error);
+    }
+    // Set the flag only now, on the user in the CURRENT document: any request served during the SMTP
+    // await reloaded the global DB, so a flag set earlier on `u` would be dropped by the save below
+    // (losing both the cooldown and the Team & Access tag).
+    const cur = DB.users.find(x=>x.id===u.id); if (cur) cur.resetRequestedAt = stamp;
+    if (emailed) audit(null,'password-reset-request','', u.id+' (e-mailed)');
+    else { // no e-mail on file / SMTP off / send failed: the request shows in Team & Access and managers are alerted
+      audit(null,'password-reset-request','', u.id+' (admin notified)');
+      alertAll('Password reset requested', (u.name||u.id)+' ('+u.id+') asked for a password reset. Issue a reset link from Team & Access.');
+    }
+    saveDB(); return send(res,200,{ ok:true });
+  }
+  if (seg[0]==='password' && seg[1]==='reset' && seg[2]==='check' && method==='POST') {
+    const b = await readBody(req); const u = verifyResetToken(b.token);
+    if (!u) return send(res,400,{error:RESET_BAD});
+    return send(res,200,{ ok:true, user:{ id:u.id, name:u.name } });
+  }
+  if (seg[0]==='password' && seg[1]==='reset' && !seg[2] && method==='POST') {
+    const b = await readBody(req); const u = verifyResetToken(b.token);
+    if (!u) return send(res,400,{error:RESET_BAD});
+    const pw = String(b.password||'');
+    if (pw.length<6) return send(res,400,{error:'Password must be at least 6 characters'});
+    // New hash => new tv: this link, any other outstanding link and every existing session all die.
+    u.salt=crypto.randomBytes(16).toString('hex'); u.passHash=hashPw(pw,u.salt); delete u.resetRequestedAt;
+    audit(u,'password-reset','','via reset link');
+    for (const k of [...LOGIN_FAILS.keys()]) if (k.startsWith(u.id+'|')) LOGIN_FAILS.delete(k); // lift any lockout on the account
+    saveDB(); return send(res,200,{ ok:true, token:issueToken(u), user:pubUser(u) });
   }
 
   let user = userByToken(req); let viaApiKey = false;
@@ -880,7 +1008,7 @@ async function api(req, res, url) {
     const b = await readBody(req);
     if(!checkPw(dbu, String(b.current||''))) return send(res,401,{error:'Current password is incorrect'});
     if(String(b.new||'').length<6) return send(res,400,{error:'New password must be at least 6 characters'});
-    dbu.salt=crypto.randomBytes(16).toString('hex'); dbu.passHash=hashPw(String(b.new),dbu.salt); audit(user,'change-password'); saveDB();
+    dbu.salt=crypto.randomBytes(16).toString('hex'); dbu.passHash=hashPw(String(b.new),dbu.salt); delete dbu.resetRequestedAt; audit(user,'change-password'); saveDB();
     // Changing the password invalidates every prior token (tv changes); hand back a fresh one
     // so the current session keeps working while other sessions are logged out.
     return send(res,200,{ ok:true, token:issueToken(dbu) });
@@ -1044,6 +1172,26 @@ async function api(req, res, url) {
       delete u.archived; delete u.archivedAt; delete u.archivedBy;
       audit(user,'user-restore','',uid); saveDB(); return send(res,200,{ ok:true, users:DB.users.filter(x=>!x.archived).map(pubUser) });
     }
+    // Admin-issued reset link: works with no e-mail at all (the manager copies it to the user), so the
+    // admin never has to know or set the user's new password. Optionally e-mailed when SMTP is set up.
+    if(uid && seg[3]==='reset-link' && method==='POST'){
+      const u=DB.users.find(x=>x.id===uid); if(!u) return send(res,404,{error:'User not found'});
+      if(u.role==='Administrator' && !isAdmin(user)) return send(res,403,{error:'Only an Administrator can issue a reset link for an Administrator account'});
+      if(u.archived) return send(res,409,{error:'User is archived — restore it first'});
+      if(u.source==='ad' || !u.passHash) return send(res,400,{error:'This account signs in via Active Directory / Microsoft — reset its password there.'});
+      const b=await readBody(req); const exp=Date.now()+RESET_ADMIN_MS; const token=signResetToken(u, exp);
+      let emailed=false;
+      if(b.email===true){
+        if(!u.email) return send(res,400,{error:'This user has no e-mail address on file — copy the link and give it to them instead.'});
+        if(!emailEnabled()) return send(res,400,{error:'E-mail is not configured on this server (RESEND_API_KEY or SMTP_HOST) — copy the link and give it to the user instead.'});
+        if(!appBaseUrl()) return send(res,400,{error:'APP_URL is not set, so the server cannot build a link to e-mail — copy the link and give it to the user instead.'});
+        const r=await EMAIL.send(CFG, resetEmailMsg(u, token, RESET_ADMIN_MS)); // awaited: serverless freezes after the response
+        if(!r || !r.ok) return send(res,502,{error:'Could not send the e-mail ('+((r&&r.error)||'unknown error')+') — copy the link instead.'});
+        emailed=true;
+      }
+      audit(user,'issue-reset-link','', uid+(emailed?' (e-mailed)':'')); saveDB();
+      return send(res,200,{ ok:true, token, expiresAt:new Date(exp).toISOString(), emailed });
+    }
     if(method==='POST'){
       const b=await readBody(req);
       const id=String(b.id||'').trim().toLowerCase().replace(/[^a-z0-9._-]/g,'');
@@ -1077,7 +1225,7 @@ async function api(req, res, url) {
       if(String(b.name||'').trim()) u.name=String(b.name).trim();
       if(typeof b.email==='string'){ const em=b.email.trim().toLowerCase(); if(em && !EMAIL_RE.test(em)) return send(res,400,{error:'Invalid e-mail address'}); if(em && DB.users.find(x=>x.id!==uid && x.email===em)) return send(res,409,{error:'Another user already has that e-mail'}); u.email=em; }
       if(Array.isArray(b.qualifiedStages)) u.qualifiedStages=b.qualifiedStages.map(Number).filter(x=>x>=1&&x<=4);
-      if(b.password){ if(String(b.password).length<6) return send(res,400,{error:'Password must be at least 6 characters'}); u.salt=crypto.randomBytes(16).toString('hex'); u.passHash=hashPw(String(b.password),u.salt); }
+      if(b.password){ if(String(b.password).length<6) return send(res,400,{error:'Password must be at least 6 characters'}); u.salt=crypto.randomBytes(16).toString('hex'); u.passHash=hashPw(String(b.password),u.salt); delete u.resetRequestedAt; } // a set password answers any pending reset request
       audit(user,'update-user','',uid); saveDB(); return send(res,200,{ ok:true, users:DB.users.map(pubUser) });
     }
     // DELETE = archive: the account is disabled (sign-in blocked, live sessions killed) but kept,
@@ -1593,7 +1741,7 @@ async function api(req, res, url) {
 
   return send(res,404,{error:'Unknown API route'});
 }
-function pubUser(u){ return { id:u.id, name:u.name, role:u.role, qualifiedStages:Array.isArray(u.qualifiedStages)?u.qualifiedStages:[], email:u.email||'', source:u.source||'local', archived:!!u.archived }; }
+function pubUser(u){ return { id:u.id, name:u.name, role:u.role, qualifiedStages:Array.isArray(u.qualifiedStages)?u.qualifiedStages:[], email:u.email||'', source:u.source||'local', archived:!!u.archived, resetRequested:u.resetRequestedAt||'' }; }
 /* Resolve a verified SSO e-mail to a user: known users keep their role; unknown domain
    users get least-privilege QA Officer (carried in the signed token, not persisted to DB). */
 /* Map a verified SSO e-mail to a local account by its EXPLICIT email field only — never by the
@@ -1767,7 +1915,7 @@ function maybeSendScheduledReport(){
     if(!due) return;
     DB.lastReportDate=today;
     const d=buildDigest(); const subject=CFG.orgName+' — Scheduled QA Report '+today;
-    EMAIL.send(CFG,{ subject, text:digestText(d), html:digestHtml(d) }).then(r=>{ if(r&&!r.ok&&r.error!=='email disabled') console.log('Scheduled report email:', r.error); }).catch(()=>{});
+    sendMailBg({ subject, text:digestText(d), html:digestHtml(d) }, 'Scheduled report email');
     try{ NOTIFY.alert(CFG, subject, digestText(d)); }catch(e){}
     audit(null,'scheduled-report','', sched+' report sent'); saveDB();
   }catch(e){ console.warn('Scheduled report check failed:', e && e.message); }
@@ -1801,7 +1949,7 @@ function checkChecklistReminders(){
         : (d.frequency==='weekly') ? ' Weekly check due this week.'
         : (' Monthly check — '+(d.daysLeft!=null?d.daysLeft+' day(s) left this month.':'due this month.'));
       const text=d.code+' ('+d.title+') has not been completed for '+d.period+'.'+cadence;
-      if(to.length) EMAIL.send(CFG,{ to, subject, text }).then(r=>{ if(r&&!r.ok&&r.error!=='email disabled') console.log('Checklist reminder email:', r.error); }).catch(()=>{});
+      if(to.length) sendMailBg({ to, subject, text }, 'Checklist reminder email');
       try{ NOTIFY.alert(CFG, subject, text); }catch(e){}
       audit(null,'checklist-reminder','',d.code+' '+d.period+' ('+d.status+')');
     });
@@ -1851,6 +1999,7 @@ function digestHtml(d){
        _saveChain) BEFORE emitting it, so the function can't freeze with a write still in flight.
      - Long-running (local / on-prem container): the same handler runs behind http.createServer
        (see the require.main block below), with the classic setInterval timers restored. */
+let _longRunning = false; // set by the require.main block below (local / on-prem server)
 async function handleRequest(req, res) {
   let url; try { url = new URL(req.url, 'http://x'); } catch (e) { res.writeHead(400); return res.end('bad request'); }
   const method = req.method || 'GET';
@@ -1896,6 +2045,14 @@ async function handleRequest(req, res) {
   } finally {
     if (lock && STORAGE.releaseLock) { try { await STORAGE.releaseLock(lock); } catch (e) {} }
   }
+  // Serverless: let this request's background e-mails (hold/reject/CAPA alerts, checklist mail, cron
+  // reminders + scheduled report) finish before the response freezes the function; each is capped at
+  // 15 s, inside maxDuration. After the lock is released, so it never blocks other writers. The
+  // long-running server keeps them fire-and-forget.
+  if (!_longRunning && _pendingMail.size) await Promise.all([..._pendingMail]);
+  // A handler may hold its answer to a minimum time (POST /api/password/forgot). Waited out here,
+  // AFTER the write lock is released, so the padding never blocks other writers.
+  if (res._notBefore) { const w = res._notBefore - Date.now(); if (w > 0) await new Promise(r => setTimeout(r, w)); }
   // Emit the deferred response (unless a handler already streamed one directly).
   if (res._resp && !res.headersSent && !res.writableEnded) {
     res.writeHead(res._resp.code, res._resp.headers || {});
@@ -1913,6 +2070,7 @@ const HOST = process.env.HOST || CFG.host;
    Skipped on Vercel, where api/index.js require()s this module and the platform owns the
    process lifecycle + scheduling (Vercel Cron drives the jobs the timers below would). */
 if (require.main === module) {
+  _longRunning = true;
   const server = http.createServer(handleRequest);
   let _shuttingDown = false;
   function shutdown(sig){ if(_shuttingDown) return; _shuttingDown=true; console.log('Shutting down ('+sig+')…'); server.close(async ()=>{ try{ await _saveChain; }catch(e){} try{ await Promise.resolve(STORAGE.close && STORAGE.close()); }catch(e){} process.exit(0); }); setTimeout(()=>process.exit(0), 8000).unref(); }

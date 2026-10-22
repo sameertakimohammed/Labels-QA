@@ -13,6 +13,17 @@ A role-based training programme for the Starkist label QA system. Pair this with
 
 1. **Install the app** — open the site in your browser → **Add to Home Screen / Install**.
 2. **Sign in** — username + password, or **Sign in with Microsoft 365**.
+   - **Forgot your password?** Tap **Forgot password?** under **Sign in**, enter your username (or
+     your account e-mail) → **Request reset**. If your account has an e-mail address and the server
+     can send e-mail, a reset link arrives by e-mail (valid 30 minutes). Otherwise your request is
+     flagged in **Team & Access** (managers only get a pushed alert if Teams / alert e-mail is set
+     up) — so ask your **Quality Manager or Administrator** for a **reset link**.
+   - **Using a reset link:** open it → type the new password twice (min 6 characters) → **Save new
+     password**. You're signed straight in; the link works **once**, your old password stops
+     working and any other device signed in as you is signed out. Never share a reset link; on a
+     shared tablet finish the reset once you open it (the browser's history keeps the link until it
+     is used or expires). **Cancel** leaves without changing anything.
+   - Active Directory / Microsoft 365 accounts reset their password in the directory, not here.
 3. **Orient yourself** — the left sidebar groups everything: **Overview · Inspection · Quality ·
    Reports · Settings**. The top-right shows your name/role, the online dot, and Logout.
 4. **The golden rule:** everything is keyed to a **Job #**, tracked through **3 stages**, and every
@@ -124,6 +135,18 @@ calibrations, hold/reject) and action lists. Start your day here; use **📄 Pri
 **Team & Access** — add users, set roles, and tick each person's **qualified stages**. Delete jobs
 if necessary (recorded in the audit trail).
 
+**Forgotten passwords:** a **Reset requested** tag next to a username means that person tapped
+*Forgot password?* (it clears when they reset or sign in). Unless Teams / alert e-mail is set up,
+nobody is pushed an alert — check **Team & Access** when someone says they're locked out. If e-mail
+is set up and they have an e-mail address, they were probably e-mailed a link already — check with
+them first. Otherwise click **Reset link** on their row → **Copy link** and hand it to them directly
+(in person or a private message — whoever holds it can set the password). It works once and expires
+in 24 hours; **E-mail it to …** appears when they have an e-mail address and e-mail is set up. You
+never need to know or choose their new password. Only an Administrator can issue a link for an
+Administrator account; AD / Microsoft 365 accounts are reset in the directory.
+**Issuing a new link does not cancel earlier ones.** Shared a link by mistake? Set a temporary
+password in **Edit** — any password change kills every outstanding link — then issue a fresh one.
+
 ### 3.4 Verify the audit trail
 **Audit Trail → Verify integrity** before audits/reviews to prove the log hasn't been altered.
 
@@ -135,6 +158,7 @@ if necessary (recorded in the audit trail).
 - [ ] I can read the Executive RAG dashboard and act on red items.
 - [ ] I can filter Reports and interpret SPC Cp/Cpk.
 - [ ] I can manage users and assign stage qualifications.
+- [ ] I can give a user a one-time password reset link (and see who has asked for one).
 - [ ] I can verify audit-trail integrity.
 
 ---
@@ -165,6 +189,11 @@ backup** (takes a safety snapshot first, then replaces all data). Always copy ba
 - Keep the app behind **HTTPS**.
 - Configure **Microsoft Entra ID SSO** (`deploy/ENTRA-SSO-SETUP.md`) for real Microsoft logins.
 - Review the **login-lockout** thresholds (`config.security`).
+- **Password resets** — reset links are one-time and short-lived; hand them only to the person.
+  To have *Forgot password?* e-mail links automatically, configure e-mail (Resend:
+  `RESEND_API_KEY` + `EMAIL_FROM`; or SMTP: `SMTP_*`) and make sure the app knows its public address
+  (`APP_URL`; on Vercel the production URL is used automatically). Users also need an e-mail
+  address on their account (Team & Access).
 
 > **Exercise (Administrator):** create a test user qualified for Printing only, turn on
 > competency enforcement, confirm they're blocked on Sheeting / Slitting, issue a read-only API key
@@ -181,7 +210,7 @@ backup** (takes a safety snapshot first, then replaces all data). Always copy ba
 
 ## 5. Quick reference card (print this)
 
-**Sign in:** username + password, or *Sign in with Microsoft 365*. · **Logout:** top-right.
+**Sign in:** username + password, or *Sign in with Microsoft 365*. · **Forgot password?** under *Sign in* → ask your manager for a reset link if no e-mail arrives. · **Logout:** top-right.
 **Online?** green dot = online; red = offline (work continues, syncs later — watch the **⤿ sync** badge).
 
 | I want to… | Go to |
@@ -198,6 +227,7 @@ backup** (takes a safety snapshot first, then replaces all data). Always copy ba
 | See KPIs vs targets | **Executive** *(manager)* |
 | Filter & export data | **Reports** → CSV / Excel |
 | Manage people | **Team & Access** *(manager)* |
+| Give someone a password reset link | **Team & Access** → *Reset link* *(Quality Manager / Administrator)* |
 | Prove the log is intact | **Audit Trail → Verify integrity** *(manager)* |
 
 **Remember:** complete stages **in order**; fill **required fields**; **photograph** defects;

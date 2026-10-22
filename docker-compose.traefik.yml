@@ -43,9 +43,16 @@ services:
       LDAP_BASE_DN: ${LDAP_BASE_DN:-}
       LDAP_BIND_DN: ${LDAP_BIND_DN:-}
       LDAP_BIND_PASSWORD: ${LDAP_BIND_PASSWORD:-}
-      # Manager e-mail (checklist alerts, hold/reject, digest). Set SMTP_HOST to turn it on;
-      # add SMTP_USER/SMTP_PASS only for an authenticated relay. NOTIFY_EMAIL_TO is a comma-
-      # separated fallback recipient list (managers/supervisors with an e-mail also get it).
+      # Manager e-mail (checklist alerts, hold/reject, digest). Set RESEND_API_KEY (Resend API;
+      # needs outbound HTTPS and EMAIL_FROM on the verified domain) or SMTP_HOST (relay) to turn
+      # it on; Resend wins if both. SMTP_ENABLED=false forces e-mail off with either configured.
+      # Add SMTP_USER/SMTP_PASS only for an authenticated relay.
+      # NOTIFY_EMAIL_TO (comma-separated) is the ONLY recipient list for hold/reject/CAPA/reset-request
+      # alerts and the digest, and replaces config.json notify.email.to (blank = that list). Checklist
+      # e-mails and reminders also go to Supervisors/QM/Admins who have an e-mail on their account.
+      RESEND_API_KEY: ${RESEND_API_KEY:-}
+      EMAIL_FROM: ${EMAIL_FROM:-}
+      SMTP_ENABLED: ${SMTP_ENABLED:-}
       SMTP_HOST: ${SMTP_HOST:-}
       SMTP_PORT: ${SMTP_PORT:-}
       SMTP_SECURE: ${SMTP_SECURE:-}
@@ -55,6 +62,12 @@ services:
       NOTIFY_EMAIL_TO: ${NOTIFY_EMAIL_TO:-}
       # Optional Microsoft Teams incoming-webhook URL (mirrors the same alerts).
       TEAMS_WEBHOOK_URL: ${TEAMS_WEBHOOK_URL:-}
+      # Password reset (optional). E-mailed "Forgot password?" links also need e-mail on (above) and a
+      # public base URL: APP_URL if set, else https://$APP_HOST (the Traefik host below). Blank = defaults.
+      APP_URL: ${APP_URL:-}
+      APP_HOST: ${APP_HOST:-}
+      PASSWORD_RESET_MINUTES: ${PASSWORD_RESET_MINUTES:-}
+      PASSWORD_RESET_ADMIN_HOURS: ${PASSWORD_RESET_ADMIN_HOURS:-}
     volumes:
       # Uploaded photos/signatures - the only app-written persistent data in Postgres mode.
       - goldenqa_uploads:/app/data/uploads

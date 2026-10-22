@@ -30,6 +30,7 @@ unchanged — see [DEPLOYMENT.md](DEPLOYMENT.md) / [CONTAINER-DEPLOY.md](CONTAIN
 | Write safety | one process = one writer | serverless has many workers, so each mutating request holds a **Postgres advisory lock** and reloads the document fresh — no lost updates |
 | Uploads | local disk `data/uploads` | **Supabase Storage** (`qa-uploads`, public-read); the endpoint returns the public URL |
 | Hourly jobs | 3 `setInterval` timers | **Vercel Cron** → `GET /api/cron` (hourly) |
+| E-mail | SMTP relay (`SMTP_*`) | **Resend** HTTP API (`RESEND_API_KEY`) — one HTTPS call per message, no SMTP session held open in a serverless function. SMTP still works |
 | Backups | file rotation timer | **Supabase** automatic backups / PITR (the in-app file backup/restore is disabled on Postgres) |
 
 ## Prerequisites
@@ -82,8 +83,31 @@ You provide two values from the Supabase dashboard:
 | `ADMIN_PASSWORD` | strong password (**the** local admin login) |
 | `ADMIN_EMAIL` | optional; the e-mail matched to the seed admin if Clerk is re-enabled |
 | `CRON_SECRET` | 48-byte random (authenticates Vercel Cron → `/api/cron`) |
+| `RESEND_API_KEY` | *optional, recommended* — turns on e-mail through the [Resend](https://resend.com) API: hold/reject alerts, the manager digest, checklist e-mails and **e-mailed password-reset links**. Use a **sending-only** key restricted to `gml.com.fj` (see below). Without e-mail, *Forgot password?* flags the user as **Reset requested** in Team & Access and a Quality Manager/Administrator hands them a copyable reset link |
+| `EMAIL_FROM` | `Golden QA <qa@gml.com.fj>` — the sender. **Required with Resend** and must be on the verified `gml.com.fj` domain (Resend rejects any other sender, including the `config.json` default) |
+| `APP_URL` | `https://qa.gml.com.fj` — public base URL put in e-mailed reset links. If unset it falls back to `https://$VERCEL_PROJECT_PRODUCTION_URL` (a Vercel system variable); set it to pin the custom domain. Never derived from the request `Host` header |
+| `SMTP_HOST` · `SMTP_PORT` · `SMTP_SECURE` · `SMTP_USER` · `SMTP_PASS` · `SMTP_FROM` | *optional alternative to Resend* — an SMTP relay instead. If both are set, **Resend wins**. `SMTP_FROM` still works as the sender (`EMAIL_FROM` wins) |
+| `PASSWORD_RESET_MINUTES` · `PASSWORD_RESET_ADMIN_HOURS` | *optional* — reset-link lifetimes (default 30 min for e-mailed links, 24 h for links issued in Team & Access) |
+| `TEAMS_WEBHOOK_URL` · `NOTIFY_EMAIL_TO` | *optional* — push alerts (hold/reject, CAPA, and *Forgot password?* requests that couldn't be e-mailed) to a Teams channel and/or a comma-separated list of manager e-mails (the latter needs e-mail configured: `RESEND_API_KEY` or `SMTP_*`). With e-mail on, alert and digest e-mails go to `NOTIFY_EMAIL_TO`, or — if it is unset — to `config.json` `notify.email.to` (currently `ateet@golden.com.fj`), so someone is always e-mailed. Only with e-mail off and no `TEAMS_WEBHOOK_URL` is **nobody alerted** — requests then only show in Team & Access |
 
 Generate secrets with: `node -e "console.log(require('crypto').randomBytes(48).toString('base64url'))"`
+
+### Turning on e-mail (Resend)
+
+`gml.com.fj` is already verified in the Resend account with sending enabled.
+
+1. Resend → **API Keys** → **Create API key**: permission **Sending access**, domain **`gml.com.fj`**.
+   Copy the `re_…` key (it is shown only once) — never commit it or paste it into `config.json`.
+2. Vercel → **Settings → Environment Variables**, environment **Production**: add `RESEND_API_KEY`
+   (the key; mark it *Sensitive*), `EMAIL_FROM` = `Golden QA <qa@gml.com.fj>`,
+   `APP_URL` = `https://qa.gml.com.fj` and `NOTIFY_EMAIL_TO` = the managers who should receive
+   alerts and the digest (comma-separated). If `NOTIFY_EMAIL_TO` is unset they go to `config.json`
+   `notify.email.to` (currently `ateet@golden.com.fj`).
+3. **Redeploy** the latest production deployment — env changes only reach new deployments.
+4. Test: **Reports → ✉ Email digest to managers** (goes to `NOTIFY_EMAIL_TO`, or `config.json`
+   `notify.email.to` if unset), and *Forgot password?* for an account that has an e-mail address.
+   Check delivery under Resend → **Emails**; a rejected send shows as `Resend <status>: <message>`
+   in the app's error message or the Vercel runtime logs.
 
 ## 4. Deploy
 
@@ -103,6 +127,22 @@ With Clerk off (the default), the sign-in screen shows the **local username + pa
 1. Open the Vercel URL → sign in with `ADMIN_USERNAME` / `ADMIN_PASSWORD`.
 2. Add the rest of your team under **Admin → Users** (username + password + role + stage
    competencies). Existing accounts already in the database stay exactly as they were.
+
+**Forgotten passwords:** users tap **Forgot password?** on the sign-in screen. With e-mail
+configured (Resend, §3) and an e-mail address on their account (**Team & Access**), they are
+e-mailed a one-time link to `APP_URL` (valid 30 min by default); managers can also send a link with
+**E-mail it to …** in Team & Access. Otherwise — no e-mail address on the account, e-mail not
+configured, or the send failed — the request shows as **Reset requested** in **Team & Access**, where a
+Quality Manager/Administrator clicks **Reset link** and hands the person a one-time link (valid 24 h
+by default). For those requests managers get a *Password reset requested* alert: by e-mail (to
+`NOTIFY_EMAIL_TO`, or `config.json` `notify.email.to` if unset) when e-mail is configured, and in
+Teams if `TEAMS_WEBHOOK_URL` is set. With neither, **nobody is alerted** — managers must check Team &
+Access (the user is told to ask them). On Vercel every e-mail — alerts, checklist e-mails, cron
+reminders and the scheduled report as well as the reset links — finishes sending before the response
+goes out, so a frozen function can't drop it; only the Teams post is best-effort (it isn't awaited,
+so a frozen function can drop it). A send that Resend rejects is logged, not retried. If no admin
+can sign in at all, use the break-glass script
+([Knowledge Base A4](docs/KNOWLEDGE-BASE.md#a4-forgot-your-password)).
 
 *If you re-enable Clerk (`CLERK_ENABLED=true`):* the Clerk sign-in card appears instead; sign in
 with the account whose e-mail equals `ADMIN_EMAIL`, and the local username/password form stays

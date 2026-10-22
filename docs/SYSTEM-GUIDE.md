@@ -48,7 +48,7 @@ the Starkist paper-label line. Every label job is keyed to a single **Job #** an
   JSON document**, so the data model is identical across the PostgreSQL and JSON-file drivers.
   Production uses **PostgreSQL** (`DATABASE_URL`); with no `DATABASE_URL` it uses a local
   `data/db.json` file with crash-safe atomic writes. Single-writer (one app container).
-- **Integrations** live in `integrations/`: `entraId.js` (SSO), `email.js` (SMTP), `notify.js`
+- **Integrations** live in `integrations/`: `entraId.js` (SSO), `email.js` (Resend API or SMTP), `notify.js`
   (Teams), `backup.js` (rotating snapshots), `webhooks.js` (outbound events).
 
 ## 3. The three inspection stages
@@ -97,8 +97,8 @@ the Starkist paper-label line. Every label job is keyed to a single **Job #** an
   - **Photos** per submission and per line item (server-issued `/uploads/` URLs only; capped at 30 per
     submission, 8 per item).
   - **Instant e-mail** to Quality Manager + Supervisors + Administrators (deduped, plus configured
-    digest recipients) on complete/verify, mirrored to Teams — fire-and-forget, no-ops when SMTP is
-    disabled. Emits a `checklist.completed` webhook.
+    digest recipients) on complete/verify, mirrored to Teams — fire-and-forget, no-ops when e-mail
+    (Resend or SMTP) is not configured. Emits a `checklist.completed` webhook.
   - **Due-tracking** — `GET /api/checklists/due` returns per-form status (`done`/`due`/`overdue` for
     daily before the per-form `dueByHour` cut-off, default noon; `done`/`due`/`scheduled` for monthly,
     "due" in the final week). "Today" is resolved in the plant timezone (`APP_TZ`, default
@@ -118,7 +118,10 @@ the Starkist paper-label line. Every label job is keyed to a single **Job #** an
 - **Suppliers** — supplier scorecards: jobs, released, hold/reject, FPY, defect & waste kg.
 
 **Settings**
-- **Team & Access** *(manager+)* — users, roles, and **per-user stage qualifications**.
+- **Team & Access** *(manager+)* — users, roles, and **per-user stage qualifications**. Quality
+  Managers/Administrators get a **Reset link** button on local accounts (a one-time password-reset
+  link to copy, or to e-mail when e-mail (Resend or SMTP) is configured); a **Reset requested** tag
+  marks users who asked via *Forgot password?*.
 - **Amendments History** *(manager+)* — the audit trail, now with **field-level before → after** for
   every change (who / when / which field / old value → new value). Filter by record ID, job, type or
   date; **export to CSV**; or open one record's history via the **Amendments** button on any job,
@@ -128,6 +131,8 @@ the Starkist paper-label line. Every label job is keyed to a single **Job #** an
 - **Settings** *(manager+)* — tolerances, KPI targets, **competency enforcement** toggle, defect
   list, **backups & storage**, **restore from backup** (admin, JSON storage).
 - **My Account** — profile and password change.
+- **Sign-in screen** — **Forgot password?** requests a reset: e-mailed link when the account has an
+  e-mail address and e-mail is configured, otherwise the managers are flagged/alerted (see §8).
 
 ## 5. Roles & permissions
 
@@ -138,12 +143,13 @@ Four roles, increasing privilege: **QA Officer → Supervisor → Quality Manage
 | View dashboards, reports, lookup, SPC, suppliers | ✅ | ✅ | ✅ | ✅ |
 | Create / clone jobs, enter & complete stages, upload photos | ✅ | ✅ | ✅ | ✅ |
 | View CAPA / NCR / Equipment | ✅ | ✅ | ✅ | ✅ |
-| Change own password | ✅ | ✅ | ✅ | ✅ |
+| Change own password · request a reset (*Forgot password?*) · use a reset link | ✅ | ✅ | ✅ | ✅ |
 | Edit job details, place **Hold** | – | ✅ | ✅ | ✅ |
 | Create/update **CAPA**, **NCR**, **Equipment**, calibrations | – | ✅ | ✅ | ✅ |
 | Edit master data (tolerances, targets, defect list, competency toggle) | – | ✅ | ✅ | ✅ |
 | **Executive** dashboard, **Audit verify**, send digest, backups status | – | ✅ | ✅ | ✅ |
 | Manage **users**, delete jobs | – | – | ✅ | ✅ |
+| Issue a **password reset link** (local accounts; for an Administrator account: Administrator only) | – | – | ✅ | ✅ |
 | **API keys**, **webhooks**, **restore from backup** | – | – | – | ✅ |
 | Bypass competency gating | – | – | – | ✅ |
 
@@ -164,7 +170,7 @@ The database is one JSON document with these collections:
 
 | Collection | Holds |
 |---|---|
-| `users` | id, name, role, scrypt salt+hash, `qualifiedStages[]` |
+| `users` | id, name, role, scrypt salt+hash, `qualifiedStages[]`, email, source (`local`/`ad`), `resetRequestedAt` (pending *Forgot password?* request; cleared when the password changes or the user signs in with their password) |
 | `jobs` | jobNo, machine, customer, product, created, `stage1..4`, `statusOverride` |
 | `capas` | id, jobNo, title, severity, status, root cause, actions, owner, dueDate, effectiveness, escalation |
 | `ncrs` | id, jobNo, description, disposition, severity, status, `capaId` link |
@@ -186,7 +192,7 @@ Photos and signatures are stored as files under `data/uploads/`.
 | `orgName` | Organisation name shown in the UI and reports |
 | `ldap` | Local Active Directory (LDAPS) sign-in — `enabled` + `LDAP_*` env + `roleGroups` group→role map (`deploy/AD-SSO-SETUP.md`) |
 | `sso` | Cloud Microsoft Entra ID sign-in (off by default). Fill `tenantId`/`clientId` to require real Entra ID `id_token` validation (`deploy/ENTRA-SSO-SETUP.md`) |
-| `notify.email` | SMTP for hold/reject alerts + digests (`secure:true`=465 implicit TLS, `false`=587 STARTTLS) |
+| `notify.email` | SMTP for hold/reject alerts + digests (`secure:true`=465 implicit TLS, `false`=587 STARTTLS). Resend is configured by env only (`RESEND_API_KEY`, below) — never put the key here |
 | `notify.teamsWebhookUrl` | Microsoft Teams Incoming Webhook for alerts/digest |
 | `tolerances` | COF min/max, registration max (mm), barcode min grade — drive auto pass/fail and SPC limits |
 | `storage` | Ignored when `DATABASE_URL` is set (production uses PostgreSQL); otherwise a local `data/db.json` file |
@@ -199,12 +205,54 @@ Photos and signatures are stored as files under `data/uploads/`.
 `DATABASE_URL` (enables PostgreSQL), `ADMIN_USERNAME` / `ADMIN_PASSWORD` (seed the first admin),
 `BACKUP_DIR`, `METRICS_TOKEN`.
 
+**E-mail** (alerts, digests, checklist e-mails, reset links): `RESEND_API_KEY` (Resend HTTP API —
+recommended on Vercel) or `SMTP_HOST` / `SMTP_PORT` / `SMTP_SECURE` / `SMTP_USER` / `SMTP_PASS` (relay)
+turns it on; if both are set, Resend wins, and `SMTP_ENABLED=false` forces e-mail off. `EMAIL_FROM` is
+the sender (required with Resend and must be on its verified domain, e.g. `Golden QA <qa@gml.com.fj>`;
+`SMTP_FROM` is the older name, `EMAIL_FROM` wins), `NOTIFY_EMAIL_TO` the always-notify recipients.
+
+**Password reset:** `PASSWORD_RESET_MINUTES` (lifetime of a self-service, e-mailed link; default
+`30`), `PASSWORD_RESET_ADMIN_HOURS` (lifetime of a link issued from Team & Access; default `24`),
+`APP_URL` (public base URL put in e-mailed links, e.g. `https://goldenqa.gml.com.fj`; if unset the
+server uses `https://$VERCEL_PROJECT_PRODUCTION_URL`, which Vercel sets automatically, then
+`https://$APP_HOST`). The base URL is **never** taken from the request's `Host` header (that would
+let an attacker get reset e-mails pointing at their own site). E-mailed links need **all three** of:
+e-mail configured (Resend or SMTP: `RESEND_API_KEY` or `SMTP_HOST`… / `notify.email`), a base URL,
+and an e-mail address on the account — otherwise *Forgot password?* falls back to notifying the
+managers, and Team & Access still issues copyable links. `GET /api/config` reports
+`passwordReset.email` = e-mail enabled **and** a base URL
+present, `passwordReset.minutes` = the e-mailed link lifetime (shown on the sign-in screen), and
+`passwordReset.directory` = AD sign-in is on (the sign-in screen then says Windows passwords are reset
+by IT).
+
 ## 8. Security
 
 - **Authentication** — scrypt password hashing; stateless HMAC-signed session tokens (survive
   restarts, work across replicas); optional Microsoft Entra ID `id_token` verification.
 - **Login brute-force lockout** — N failed attempts per username+IP lock that login for a cool-off
   window (`config.security`); failures are audited; locked attempts get HTTP 429.
+- **Password reset links** — HMAC-signed like session tokens but with a separate derived key
+  (`HMAC(SECRET_KEY, 'pwreset-v1')`), so a reset token is never accepted as a session and vice versa.
+  Each carries the account's password-hash version and role: it works **once** (dies the moment the
+  password changes, which also signs out every existing session), dies if the account's role changes
+  (so the "Administrator accounts: Administrator only" rule can't be side-stepped by a promotion after
+  issue), and expires (30 min e-mailed / 24 h admin-issued by default). Issuing a new link does **not**
+  cancel earlier ones — to kill a leaked link, set a new password. Links use a `#reset=` URL fragment
+  so the token never reaches server logs or a `Referer`; the app strips it from the address bar, but
+  the browser's own history still records the URL, so an unused link on a shared device stays usable
+  until it expires (lower `PASSWORD_RESET_ADMIN_HOURS` for shared-tablet sites). Only active local
+  accounts qualify (not AD, not archived). *Forgot password?* always answers the same generic 200 and
+  does the same work for every outcome (an audit entry + a save), so the body and the timing don't
+  reveal accounts; with e-mail on, where a real account with an e-mail address also waits on the send,
+  every answer is held to at least 3 s — only a mail server slower than that still shows in the
+  timing. It is throttled per IP (5 / 15 min → 429) and per account (one e-mail/alert per 5 min). A
+  request records `resetRequestedAt` (shown as **Reset requested** in Team & Access until the password
+  changes or the user signs in); when no link could be e-mailed it also alerts managers: by e-mail
+  when e-mail is on (to `NOTIFY_EMAIL_TO`, or `config.json` `notify.email.to` if that is unset, so
+  someone is always e-mailed) and via Teams if configured (Teams is best-effort on serverless). Only
+  with e-mail off and no Teams webhook is nobody pushed an alert. Requests,
+  issued links and resets are all audited (`password-reset-request`, `issue-reset-link`,
+  `password-reset`).
 - **Tamper-evident audit trail** — each entry is HMAC-chained (key = `SECRET_KEY`) to the previous;
   `GET /api/audit/verify` (or the **Verify integrity** button) detects any edit/insert/delete and
   names the broken entry. Strength depends on `SECRET_KEY` staying secret.
@@ -215,7 +263,7 @@ Photos and signatures are stored as files under `data/uploads/`.
 ## 9. Integrations & automation
 
 - **Microsoft Entra ID SSO** — `deploy/ENTRA-SSO-SETUP.md`.
-- **Alerts** — hold/reject events and the manager digest go to Teams (webhook) and/or e-mail (SMTP).
+- **Alerts** — hold/reject events and the manager digest go to Teams (webhook) and/or e-mail (Resend or SMTP).
 - **Scheduled reports** — automatic digest on a daily/weekly/monthly cadence (`config.reports`).
 - **REST API keys** — `x-api-key: gqa_…` header, **read-only**, for BI tools. Manage in Integrations.
 - **Webhooks** — signed JSON POST (`X-GQA-Signature` HMAC) on `job.released`, `job.hold`,
@@ -236,8 +284,9 @@ Photos and signatures are stored as files under `data/uploads/`.
 - **On-prem (simple):** `node server.js` → `http://<server-ip>:3000`. See `DEPLOYMENT.md`.
 - **Container (production):** Portainer **GitOps** + Traefik v3 — see `CONTAINER-DEPLOY.md`.
   Portainer polls `main` and redeploys on each new commit; Traefik terminates TLS and routes by host.
-- **CI:** `.github/workflows/ci.yml` runs `node --check` on all JS plus the smoke test
-  (`npm test`) on Node 20 & 24 for every PR/push to `main`.
+- **CI:** `.github/workflows/ci.yml` runs `node --check` on all JS plus the smoke tests
+  (`npm test`: API, AD sign-in, reset e-mail over a stub SMTP server, and the Resend transport
+  against a stub Resend API) on Node 20 & 24 for every PR/push to `main`.
 
 ## 12. REST API reference (summary)
 
@@ -246,6 +295,11 @@ All endpoints are under `/api`. Auth: `x-token: <session>` (login) or `x-api-key
 | Method & path | Purpose | Min role |
 |---|---|---|
 | `POST /api/login` | Username/password or SSO sign-in | – |
+| `GET /api/config` | Public sign-in config (org name, SSO/Clerk flags, `passwordReset.email` / `.minutes` / `.directory`) | – |
+| `POST /api/password/forgot` `{identifier}` | *Forgot password?* — username or e-mail; always `200 {ok:true}` (e-mails a link or flags the managers; held to ≥ 3 s when e-mail is on); `429` if throttled | – |
+| `POST /api/password/reset/check` `{token}` | Validate a reset link → `{ok, user:{id,name}}`; `400` if invalid/expired/used | – |
+| `POST /api/password/reset` `{token, password}` | Set a new password (min 6) via a reset link → `{ok, token, user}` (signed in; old sessions end) | – |
+| `POST /api/admin/users/:id/reset-link` `{email?}` | Issue a one-time reset link → `{ok, token, expiresAt, emailed}` (client builds `<origin>/#reset=<token>`); `email:true` also e-mails it. Administrator accounts: Administrator only; AD → `400`, archived → `409` | QM |
 | `GET /api/me` · `POST /api/me/password` | Profile · change password | authed |
 | `GET /api/jobs` · `GET /api/jobs/:no` | List · fetch a job | authed |
 | `POST /api/jobs` · `POST /api/jobs/:no/clone` | Create · clone | authed |

@@ -1,18 +1,48 @@
 'use strict';
-/* Zero-dependency SMTP sender for hold/reject alerts + manager digest.
-   Node built-ins only (net, tls). Handles implicit TLS (465) and STARTTLS (587),
-   optional AUTH LOGIN, plain or multipart/alternative bodies. Never throws. */
+/* Zero-dependency e-mail sender for hold/reject alerts, manager digest and password-reset links.
+   Two transports, Node built-ins only:
+     - Resend HTTP API (resendApiKey set): preferred on serverless (Vercel), where one HTTPS call is
+       quicker and more reliable than holding an SMTP session open.
+     - SMTP (net, tls): implicit TLS (465) and STARTTLS (587), optional AUTH LOGIN — the on-prem relay.
+   Plain or multipart/alternative bodies. Never throws. */
 const net = require('net'); const tls = require('tls');
 
 function b64(s){ return Buffer.from(String(s),'utf8').toString('base64'); }
 
+function isEnabled(e){ return !!(e && e.enabled && (e.resendApiKey || e.smtpHost)); }
+
+/* Resend: POST /emails. `from` must be on a domain verified in the Resend account. The API key is
+   only ever sent in the Authorization header and never logged; errors carry Resend's message only. */
+function sendResend(e, from, recips, msg){
+  const ctl = new AbortController(); const timer = setTimeout(()=>ctl.abort(), 15000); // same budget as SMTP
+  const body = { from, to:recips, subject:String(msg.subject||'').replace(/[\r\n]+/g,' '), text:msg.text||'' };
+  if(msg.html) body.html = msg.html;
+  return fetch(e.resendApiUrl || 'https://api.resend.com/emails', { method:'POST', signal:ctl.signal,
+      headers:{ 'Authorization':'Bearer '+e.resendApiKey, 'Content-Type':'application/json' }, body:JSON.stringify(body) })
+    .then(async r=>{ if(r.ok) return { ok:true }; const j=await r.json().catch(()=>({})); return { ok:false, error:'Resend '+r.status+': '+(j.message||j.name||r.statusText||'error') }; })
+    .catch(err=>({ ok:false, error:'Resend: '+(err && err.name==='AbortError' ? 'timeout' : String(err && err.message || err)) }))
+    .finally(()=>clearTimeout(timer));
+}
+
 function send(CFG, msg){
+  const e = (CFG && CFG.notify && CFG.notify.email) || {};
+  if(!isEnabled(e)) return Promise.resolve({ ok:false, error:'email disabled' });
+  const recips = [].concat(msg.to || e.to || []).map(s=>String(s).trim()).filter(Boolean);
+  if(!recips.length) return Promise.resolve({ ok:false, error:'no recipients' });
+  if(e.resendApiKey){
+    // No localhost fallback here: Resend rejects any sender that isn't on a verified domain.
+    if(!e.from) return Promise.resolve({ ok:false, error:'EMAIL_FROM is not set (needed for Resend)' });
+    return sendResend(e, e.from, recips, msg);
+  }
+  return sendSmtp(e, recips, msg);
+}
+
+function sendSmtp(e, recips, msg){
   return new Promise((resolve)=>{
-    const e = (CFG && CFG.notify && CFG.notify.email) || {};
-    if(!e.enabled || !e.smtpHost) return resolve({ ok:false, error:'email disabled' });
     const from = e.from || 'qa@localhost';
-    const recips = [].concat(msg.to || e.to || []).map(s=>String(s).trim()).filter(Boolean);
-    if(!recips.length) return resolve({ ok:false, error:'no recipients' });
+    // EMAIL_FROM may carry a display name ("Golden QA <qa@gml.com.fj>"): the From: header keeps it,
+    // but the SMTP envelope (MAIL FROM) must be the bare address or relays answer 501.
+    const m = /<\s*([^<>\s]+@[^<>\s]+)\s*>\s*$/.exec(from); const envFrom = m ? m[1] : from;
     const secure = !!e.secure;
     const port = e.smtpPort || (secure ? 465 : 587);
     const rejectUnauthorized = e.rejectUnauthorized !== false;
@@ -50,7 +80,7 @@ function send(CFG, msg){
           line(b64(e.user)); await expect();     // 334 Password
           line(b64(e.pass)); await expect();     // 235 authenticated
         }
-        line('MAIL FROM:<'+from+'>'); await expect();
+        line('MAIL FROM:<'+envFrom+'>'); await expect();
         for(const r of recips){ line('RCPT TO:<'+r+'>'); await expect(); }
         line('DATA'); await expect();            // 354 start mail input
         sock.write(buildMessage(from, recips, msg));
@@ -102,4 +132,4 @@ function buildMessage(from, recips, msg){
   return head.join('\r\n')+'\r\n\r\n'+body+'\r\n';
 }
 
-module.exports = { send };
+module.exports = { send, isEnabled };
