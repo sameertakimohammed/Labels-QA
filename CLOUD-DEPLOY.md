@@ -88,7 +88,7 @@ You provide two values from the Supabase dashboard:
 | `APP_URL` | `https://qa.gml.com.fj` — public base URL put in e-mailed reset links. If unset it falls back to `https://$VERCEL_PROJECT_PRODUCTION_URL` (a Vercel system variable); set it to pin the custom domain. Never derived from the request `Host` header |
 | `SMTP_HOST` · `SMTP_PORT` · `SMTP_SECURE` · `SMTP_USER` · `SMTP_PASS` · `SMTP_FROM` | *optional alternative to Resend* — an SMTP relay instead. If both are set, **Resend wins**. `SMTP_FROM` still works as the sender (`EMAIL_FROM` wins) |
 | `PASSWORD_RESET_MINUTES` · `PASSWORD_RESET_ADMIN_HOURS` | *optional* — reset-link lifetimes (default 30 min for e-mailed links, 24 h for links issued in Team & Access) |
-| `TEAMS_WEBHOOK_URL` · `NOTIFY_EMAIL_TO` | *optional* — push alerts (hold/reject, CAPA, and *Forgot password?* requests that couldn't be e-mailed) to a Teams channel and/or a comma-separated list of manager e-mails (the latter needs e-mail configured: `RESEND_API_KEY` or `SMTP_*`). With e-mail on, alert and digest e-mails go to `NOTIFY_EMAIL_TO`, or — if it is unset — to `config.json` `notify.email.to` (currently `ateet@golden.com.fj`), so someone is always e-mailed. Only with e-mail off and no `TEAMS_WEBHOOK_URL` is **nobody alerted** — requests then only show in Team & Access |
+| `TEAMS_WEBHOOK_URL` · `NOTIFY_EMAIL_TO` | *optional* — push operational alerts (hold/reject, CAPA) and the digest to a Teams channel and/or a comma-separated list of QA-manager e-mails (*Password reset requested* alerts e-mail the Administrators instead — see below) (the latter needs e-mail configured: `RESEND_API_KEY` or `SMTP_*`). With e-mail on, alert and digest e-mails go to `NOTIFY_EMAIL_TO`, or — if it is unset — to `config.json` `notify.email.to` (currently `ateet@golden.com.fj`), so someone is always e-mailed. Only with e-mail off and no `TEAMS_WEBHOOK_URL` is **nobody alerted** — requests then only show in Team & Access |
 
 Generate secrets with: `node -e "console.log(require('crypto').randomBytes(48).toString('base64url'))"`
 
@@ -134,9 +134,11 @@ e-mailed a one-time link to `APP_URL` (valid 30 min by default); managers can al
 **E-mail it to …** in Team & Access. Otherwise — no e-mail address on the account, e-mail not
 configured, or the send failed — the request shows as **Reset requested** in **Team & Access**, where a
 Quality Manager/Administrator clicks **Reset link** and hands the person a one-time link (valid 24 h
-by default). For those requests managers get a *Password reset requested* alert: by e-mail (to
-`NOTIFY_EMAIL_TO`, or `config.json` `notify.email.to` if unset) when e-mail is configured, and in
-Teams if `TEAMS_WEBHOOK_URL` is set. With neither, **nobody is alerted** — managers must check Team &
+by default). For those requests the Administrators get a *Password reset requested* e-mail (every active
+Administrator account with an e-mail address; if none has one, it goes to `NOTIFY_EMAIL_TO` /
+`config.json` `notify.email.to` instead) when e-mail is configured. The alert is posted to Teams
+(if `TEAMS_WEBHOOK_URL` is set) instead whenever that e-mail can't go out: e-mail off, no
+Administrator e-mail, or the send failed. With neither e-mail nor Teams, **nobody is alerted** — managers must check Team &
 Access (the user is told to ask them). On Vercel every e-mail — alerts, checklist e-mails, cron
 reminders and the scheduled report as well as the reset links — finishes sending before the response
 goes out, so a frozen function can't drop it; only the Teams post is best-effort (it isn't awaited,

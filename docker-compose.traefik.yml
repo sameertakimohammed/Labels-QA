@@ -47,9 +47,10 @@ services:
       # needs outbound HTTPS and EMAIL_FROM on the verified domain) or SMTP_HOST (relay) to turn
       # it on; Resend wins if both. SMTP_ENABLED=false forces e-mail off with either configured.
       # Add SMTP_USER/SMTP_PASS only for an authenticated relay.
-      # NOTIFY_EMAIL_TO (comma-separated) is the ONLY recipient list for hold/reject/CAPA/reset-request
-      # alerts and the digest, and replaces config.json notify.email.to (blank = that list). Checklist
-      # e-mails and reminders also go to Supervisors/QM/Admins who have an e-mail on their account.
+      # NOTIFY_EMAIL_TO (comma-separated) is the ONLY recipient list for hold/reject/CAPA alerts and
+      # the digest, and replaces config.json notify.email.to (blank = that list). Checklist e-mails and
+      # reminders also go to Supervisors/QMs with an e-mail on their account. "Password reset requested"
+      # alerts go to Administrators with an e-mail on their account instead.
       RESEND_API_KEY: ${RESEND_API_KEY:-}
       EMAIL_FROM: ${EMAIL_FROM:-}
       SMTP_ENABLED: ${SMTP_ENABLED:-}

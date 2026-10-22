@@ -15,6 +15,7 @@ const { spawn } = require('child_process');
 
 const DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'gqa-resend-'));
 const DATA_DIR2 = fs.mkdtempSync(path.join(os.tmpdir(), 'gqa-resend-sv-'));
+const DATA_DIR3 = fs.mkdtempSync(path.join(os.tmpdir(), 'gqa-resend-off-'));
 const STUB_PORT = 34593, APP_PORT = 34594;
 const API_KEY = 're_test_' + process.pid + '_secret';
 const FROM = 'Golden QA <qa@golden.test>';
@@ -55,7 +56,7 @@ function rq(method, p, body, token) {
 const tokenOf = s => { const m = /#reset=([A-Za-z0-9_.%-]+)/.exec(s || ''); return m ? decodeURIComponent(m[1]) : ''; };
 
 // args: ['server.js'] = the long-running server; ['-e', ...] = api/index.js behind http, as on Vercel.
-async function startApp(args, dataDir) {
+async function startApp(args, dataDir, extraEnv) {
   const app = spawn(process.execPath, args, {
     cwd: path.join(__dirname, '..'),
     env: Object.assign({}, process.env, {
@@ -63,8 +64,8 @@ async function startApp(args, dataDir) {
       ADMIN_PASSWORD: 'BreakGlass123', ADMIN_EMAIL,
       SMTP_HOST: '', SMTP_ENABLED: '', NOTIFY_EMAIL_TO: '',
       RESEND_API_KEY: API_KEY, RESEND_API_URL: 'http://127.0.0.1:' + STUB_PORT + '/emails', EMAIL_FROM: FROM,
-      APP_URL: 'https://qa.golden.test/',
-    }),
+      APP_URL: 'https://qa.golden.test/', TEAMS_WEBHOOK_URL: 'http://127.0.0.1:' + STUB_PORT + '/teams',
+    }, extraEnv || {}),
     stdio: ['ignore', 'ignore', 'pipe'],
   });
   app.stderr.on('data', d => console.log('APP-ERR: ' + String(d).trim()));
@@ -88,7 +89,7 @@ stub.listen(STUB_PORT, '127.0.0.1', async () => {
     r = await rq('POST', '/api/password/forgot', { identifier: ADMIN_EMAIL.toUpperCase() });
     ok('forgot -> 200 {ok:true}', r.status === 200 && r.body.ok === true, r.status + ' ' + r.raw);
     const c = calls.find(x => (x.body.to || []).includes(ADMIN_EMAIL)) || {};
-    ok('Resend called once with POST /emails', calls.length === 1 && c.method === 'POST' && c.url === '/emails', JSON.stringify(calls.map(x => x.method + ' ' + x.url)));
+    ok('Resend called once with POST /emails', calls.filter(x => x.url === '/emails').length === 1 && c.method === 'POST' && c.url === '/emails', JSON.stringify(calls.map(x => x.method + ' ' + x.url)));
     ok('Authorization: Bearer <RESEND_API_KEY>', c.auth === 'Bearer ' + API_KEY, c.auth ? '(other value)' : '(missing)');
     ok('from = EMAIL_FROM, to = the account e-mail', c.body && c.body.from === FROM && JSON.stringify(c.body.to) === JSON.stringify([ADMIN_EMAIL]), JSON.stringify(c.body && { from: c.body.from, to: c.body.to }));
     ok('subject + text + html present', !!(c.body && c.body.subject && c.body.text && c.body.html), Object.keys(c.body || {}).join(','));
@@ -106,13 +107,52 @@ stub.listen(STUB_PORT, '127.0.0.1', async () => {
     calls.length = 0;
     r = await rq('POST', '/api/admin/users/admin/reset-link', { email: true }, adminTok);
     ok('reset-link {email:true} -> emailed:true', r.status === 200 && r.body.emailed === true, r.status + ' ' + r.raw);
-    ok('reset-link e-mail went through Resend', calls.length === 1 && tokenOf(calls[0].body.text) === r.body.token, calls.length + ' call(s)');
+    const mailed = calls.filter(x => x.url === '/emails');
+    ok('reset-link e-mail went through Resend', mailed.length === 1 && tokenOf(mailed[0].body.text) === r.body.token, mailed.length + ' call(s)');
 
     // Resend refuses -> 502 carrying Resend's message (not the key)
     refuseNext = true;
     r = await rq('POST', '/api/admin/users/admin/reset-link', { email: true }, adminTok);
     ok('Resend error -> 502 with Resend\'s message', r.status === 502 && /Resend 422/.test(r.body.error || '') && /not verified/.test(r.body.error || ''), r.status + ' ' + r.raw);
     ok('error response does not contain the API key', !r.raw.includes(API_KEY));
+
+    // admin-side alert: a reset request from an account with no e-mail goes to the Administrators only,
+    // not to the operational list (NOTIFY_EMAIL_TO / config.json notify.email.to)
+    r = await rq('POST', '/api/admin/users', { id: 'nomail', name: 'No Mail', role: 'QA Officer', password: 'secret1' }, adminTok);
+    ok('created a QA Officer with no e-mail', r.status === 200, r.status + ' ' + r.raw);
+    calls.length = 0;
+    r = await rq('POST', '/api/password/forgot', { identifier: 'nomail' });
+    await sleep(800); // alert e-mails are fire-and-forget on the long-running server
+    const resetAlert = calls.find(x => /Password reset requested/.test((x.body && x.body.subject) || ''));
+    ok('reset-request alert e-mailed', !!resetAlert, JSON.stringify(calls.map(x => x.body && x.body.subject)));
+    ok('reset-request alert goes to the Administrator e-mail only', !!resetAlert && JSON.stringify(resetAlert.body.to) === JSON.stringify([ADMIN_EMAIL]), JSON.stringify(resetAlert && resetAlert.body.to));
+    const teamsTitles = () => calls.filter(x => x.url === '/teams').map(x => x.body && x.body.title);
+    ok('delivered admin alert is not also posted to the (operational) Teams channel', !teamsTitles().includes('Password reset requested'), JSON.stringify(teamsTitles()));
+
+    // ...but if that e-mail fails, the alert still reaches Teams (and the log)
+    await rq('POST', '/api/admin/users', { id: 'nomail2', name: 'No Mail Two', role: 'QA Officer', password: 'secret1' }, adminTok);
+    calls.length = 0; refuseNext = true;
+    await rq('POST', '/api/password/forgot', { identifier: 'nomail2' });
+    await sleep(800);
+    ok('failed admin-alert e-mail falls back to a Teams post', teamsTitles().includes('Password reset requested'), JSON.stringify(calls.map(x => x.url + ' ' + ((x.body && (x.body.subject || x.body.title)) || ''))));
+
+    // operational mail: a completed checklist goes to QMs/Supervisors with an e-mail + the NOTIFY list,
+    // never to an Administrator or an archived account
+    await rq('POST', '/api/admin/users', { id: 'qm1', name: 'QM One', role: 'Quality Manager', password: 'secret1', email: 'qm1@golden.test' }, adminTok);
+    await rq('POST', '/api/admin/users', { id: 'supold', name: 'Old Sup', role: 'Supervisor', password: 'secret1', email: 'supold@golden.test' }, adminTok);
+    r = await rq('DELETE', '/api/admin/users/supold', null, adminTok);
+    ok('archived the old Supervisor', r.status === 200, r.status + ' ' + r.raw);
+    r = await rq('GET', '/api/checklist-defs', null, adminTok);
+    const def = (Array.isArray(r.body) ? r.body : []).find(d => d.code === 'F-012-G') || {};
+    const responses = (def.items || []).filter(it => !it.header).map(it => ({ itemKey: it.key, status: 'Yes' }));
+    calls.length = 0;
+    r = await rq('POST', '/api/checklists', { defKey: def.id, status: 'Completed', responses }, adminTok);
+    ok('completed a checklist', r.status === 200, r.status + ' ' + r.raw.slice(0, 200));
+    await sleep(800);
+    const chk = calls.find(x => x.url === '/emails' && /F-012-G/.test((x.body && x.body.subject) || '')) || { body: {} };
+    const chkTo = chk.body.to || [];
+    ok('checklist e-mail goes to the Quality Manager and the NOTIFY list', chkTo.includes('qm1@golden.test') && chkTo.includes('ateet@golden.com.fj'), JSON.stringify(chkTo));
+    ok('checklist e-mail skips the Administrator and archived accounts', !chkTo.includes(ADMIN_EMAIL) && !chkTo.includes('supold@golden.test'), JSON.stringify(chkTo));
 
     r = await rq('GET', '/api/audit?limit=1000', null, adminTok);
     ok('audit log never contains the API key', r.status === 200 && !r.raw.includes(API_KEY), String(r.status));
@@ -134,6 +174,18 @@ stub.listen(STUB_PORT, '127.0.0.1', async () => {
     replyDelayMs = 0;
     ok('serverless: hold -> 200', r.status === 200, r.status + ' ' + r.raw);
     ok('serverless: hold alert was answered by Resend BEFORE the response went out', !!(holdCall && holdCall.replied), holdCall ? 'sent, but the response went out first' : calls.length + ' call(s), none for the hold');
+
+    // e-mail off (Teams only): an admin-side alert must still reach Teams even though an Administrator
+    // has an e-mail on file
+    await stopApp(app);
+    ({ app, up } = await startApp(['server.js'], DATA_DIR3, { RESEND_API_KEY: '' }));
+    ok('e-mail-off server is up', up);
+    r = await rq('POST', '/api/login', { username: 'admin', password: 'BreakGlass123' });
+    await rq('POST', '/api/admin/users', { id: 'nomail3', name: 'No Mail Three', role: 'QA Officer', password: 'secret1' }, r.body.token);
+    calls.length = 0;
+    await rq('POST', '/api/password/forgot', { identifier: 'nomail3' });
+    await sleep(800);
+    ok('e-mail off: reset-request alert is posted to Teams', calls.some(x => x.url === '/teams' && x.body && x.body.title === 'Password reset requested'), JSON.stringify(calls.map(x => x.url)));
   } catch (e) { console.log('TEST ERROR:', e && e.stack ? e.stack : e); fail++; }
 
   console.log('\nResend smoke summary: ' + pass + ' passed, ' + fail + ' failed');
@@ -141,5 +193,6 @@ stub.listen(STUB_PORT, '127.0.0.1', async () => {
   stub.close();
   try { fs.rmSync(DATA_DIR, { recursive: true, force: true }); } catch (e) {}
   try { fs.rmSync(DATA_DIR2, { recursive: true, force: true }); } catch (e) {}
+  try { fs.rmSync(DATA_DIR3, { recursive: true, force: true }); } catch (e) {}
   process.exit(fail ? 1 : 0);
 });

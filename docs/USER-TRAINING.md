@@ -136,8 +136,9 @@ calibrations, hold/reject) and action lists. Start your day here; use **📄 Pri
 if necessary (recorded in the audit trail).
 
 **Forgotten passwords:** a **Reset requested** tag next to a username means that person tapped
-*Forgot password?* (it clears when they reset or sign in). Unless Teams / alert e-mail is set up,
-nobody is pushed an alert — check **Team & Access** when someone says they're locked out. If e-mail
+*Forgot password?* (it clears when they reset or sign in). Administrators get a *Password reset
+requested* e-mail when e-mail is set up (or a Teams post if it isn't); Quality Managers are not
+pushed these — check **Team & Access** when someone says they're locked out. If e-mail
 is set up and they have an e-mail address, they were probably e-mailed a link already — check with
 them first. Otherwise click **Reset link** on their row → **Copy link** and hand it to them directly
 (in person or a private message — whoever holds it can set the password). It works once and expires
